@@ -1,8 +1,8 @@
 /* צלחת — service worker. The app shell and the food database are cached so
-   logging works with no signal. deploy.py stamps c94e2d5c with a content hash,
+   logging works with no signal. deploy.py stamps 5286704a with a content hash,
    so every deploy that changes a file gets a fresh cache. On localhost it
    goes network-first so edits show up on reload. */
-const VERSION = 'c94e2d5c';
+const VERSION = '5286704a';
 const CACHE = 'mom-' + VERSION;
 const ASSETS = ['manifest.webmanifest', 'icon-192.png', 'icon-512.png',
   ...['app.css', 'config.js', 'db.js', 'search.js', 'calc.js', 'parse.js', 'ai.js', 'cloud.js', 'app.js', 'screens.js']

@@ -318,7 +318,8 @@ async function copyEntries(src, { date, slot }) {
 /* ================= router ================= */
 const TOP_ROUTES = new Set(['', 'recipes', 'add', 'progress', 'more']);
 const NAV_OF = { '': 'today', recipes: 'recipes', recipe: 'recipes', meal: 'recipes', add: 'add', progress: 'progress',
-  more: 'more', history: 'more', insights: 'more', settings: 'more', backup: 'more', day: 'more', food: 'recipes' };
+  more: 'more', history: 'more', insights: 'more', settings: 'more', backup: 'more', day: 'more', food: 'recipes',
+  guide: 'more', requests: 'more' };
 function parseHash() {
   const h = location.hash.replace(/^#\/?/, '');
   const [path, qs] = h.split('?');

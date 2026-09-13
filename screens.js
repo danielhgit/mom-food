@@ -15,6 +15,8 @@ const ROUTES = {
   settings: viewSettings,
   backup: viewBackup,
   setup: viewSetup,
+  guide: viewGuide,
+  requests: viewRequests,
 };
 
 /* ================= shared context ================= */
@@ -78,7 +80,8 @@ async function viewDay(date) {
   if (isToday && !closed && !entries.length && !libFoods().some((f) => f.useCount > 0)) {
     html += `<div class="card soft"><h3>שמחה שאת כאן</h3>
       <p class="note">מתחילים פשוט: רושמים את מה שאוכלים היום. כל מאכל שתרשמי נשמר במאכלים שלך, ובפעם הבאה הוא מחכה שם ללחיצה.</p>
-      <a class="btn block" href="#/add" style="margin-top:10px">${icon('plus')}לרשום את הארוחה הראשונה</a></div>`;
+      <a class="btn block" href="#/add" style="margin-top:10px">${icon('plus')}לרשום את הארוחה הראשונה</a>
+      <a class="btn block ghost" href="#/guide" style="margin-top:8px">${icon('list')}מדריך קצר לאפליקציה</a></div>`;
   }
 
   /* --- hero --- */
@@ -1030,13 +1033,187 @@ async function viewInsights() {
 /* ================= more / settings / backup ================= */
 async function viewMore() {
   setTitle('עוד');
+  const waiting = ((await DB.loadSettings()).requests || []).filter((r) => !r.sentAt).length;
   setView(`<div class="card" style="padding:4px 14px">
+    <a class="linkrow" href="#/guide">${icon('list')}מדריך לאפליקציה${icon('chev', 'chev')}</a>
+    <a class="linkrow" href="#/requests" style="border:none">${icon('pen')}<span class="grow">בקשות לדניאל</span>${waiting ? `<span class="pill gold"><span class="n">${waiting}</span> לשליחה</span>` : ''}${icon('chev', 'chev')}</a></div>
+    <div class="card" style="padding:4px 14px">
     <a class="linkrow" href="#/history">${icon('calendar')}היסטוריה${icon('chev', 'chev')}</a>
     <a class="linkrow" href="#/insights">${icon('bulb')}תובנות${icon('chev', 'chev')}</a>
     <a class="linkrow" href="#/recipes?tab=meals">${icon('book')}ארוחות קבועות${icon('chev', 'chev')}</a>
     <a class="linkrow" href="#/settings">${icon('gear')}הגדרות ויעד${icon('chev', 'chev')}</a>
     <a class="linkrow" href="#/backup" style="border:none">${icon('cloud')}גיבוי ושחזור${icon('chev', 'chev')}</a></div>
     <p class="faint center">צלחת · גרסה <span class="n">${esc(CFG.VERSION)}</span></p>`);
+}
+
+/* ================= guide ================= */
+/* Written for her: short sentences, the same words and icons as the buttons,
+   one topic per fold so nothing is long. Keep it in step with the screens. */
+async function viewGuide() {
+  setTitle('מדריך');
+  const aiOn = !!(window.AI && AI.enabled() && APP.ui.aiEnabled !== false);
+  const b = (ic, text) => `<span class="gbtn">${icon(ic, 'sm')}${text}</span>`;
+  const topics = [
+    ['leaf', 'מה האפליקציה עושה', `
+      <p>צלחת עוזרת לרדת במשקל בלי דיאטה מסובכת: רושמים מה אוכלים, ורואים כמה נשאר עד היעד של היום.</p>
+      <p>היעד מחושב במיוחד בשבילך, לפי גיל, גובה ומשקל. אחרי שלושה שבועות האפליקציה בודקת מה קורה בפועל ומציעה לתקן אותו.</p>
+      <p>הכול נשמר רק בטלפון שלך.</p>`],
+    ['home', 'המסך הראשי: היום', `
+      <p><b>העיגול</b> מראה כמה נשאר לאכול היום. ירוק זה מצוין, צהוב זה קרוב ליעד. אחרי ארבע אחר הצהריים כתוב בו כמה נשאר לערב.</p>
+      <p><b>מתחת לעיגול</b> יש ארבע ארוחות: בוקר, צהריים, ערב ונשנוש. ליד כל אחת יש ${b('plus', 'להוסיף')}, ולפעמים גם ${b('copy', 'כמו אתמול')}, שרושם שוב את מה שאכלת באותה ארוחה.</p>
+      <p><b>בערב</b>, כשנשארו קלוריות, מופיעות הצעות "מה נכנס הערב" מתוך המאכלים שלך.</p>`],
+    ['plus', 'איך רושמים אוכל', `
+      <ol>
+        <li>לוחצים על הכפתור הירוק העגול ${b('plus', 'הוספה')} באמצע למטה.</li>
+        <li>בוחרים ארוחה למעלה: בוקר, צהריים, ערב או נשנוש.</li>
+        <li>לוחצים על מאכל מתוך <b>המאכלים שלי</b>.</li>
+        <li>בוחרים כמות עם ${b('minus', '')} ו-${b('plus', '')}, ולוחצים על הכפתור הירוק למטה.</li>
+      </ol>
+      <p>זהו. כל מאכל שרשמת פעם אחת נשמר, ובפעם הבאה הוא מחכה שם ללחיצה.</p>`],
+    ['search', 'מאכל שעוד לא ברשימה', `
+      <p>כותבים את השם בחיפוש למעלה. אם הוא לא אצלך, לוחצים על הכפתור לחפש במאגר הכללי, ובוחרים את הכי מתאים.</p>
+      <p>דרכים נוספות, בתחתית מסך ההוספה:</p>
+      <ul>
+        <li>${b('mic', 'לכתוב או להגיד')}: כותבים או אומרים בקול "שתי פרוסות חלה וכוס יין", והאפליקציה מבינה לבד.</li>
+        <li>${b('barcode', 'לסרוק ברקוד')}: למוצר ארוז מהסופר. מכוונים את המצלמה לפסים.</li>
+        ${aiOn ? `<li>${b('camera', 'לצלם צלחת')}: מצלמים את האוכל ומקבלים הערכה. תמיד אפשר לתקן לפני ששומרים.</li>
+        <li>${b('label', 'לצלם תווית')}: מצלמים את טבלת הערכים שעל האריזה.</li>` : ''}
+        <li>${b('bolt', 'רק קלוריות')}: לארוחה בחוץ. הערכה גסה עדיפה על כלום.</li>
+      </ul>`],
+    ['scale', 'כמויות', `
+      <p>לכל מאכל יש מנות רגילות, כמו פרוסה, כף, כוס או יחידה. בוחרים מנה ומשנים את המספר.</p>
+      <p>אם יודעים כמה גרם, לוחצים על <b>גרם</b> ורושמים.</p>
+      <p><b>חביתה</b> סופרים בביצים. השמן בתרסיס נספר פעם אחת, וכמה ביצים באותה ארוחה נחשבות לאותה חביתה.</p>
+      <p><b>הנקודה הצבעונית</b> ליד מאכל: ירוק זה קל, צהוב זה בינוני, כתום זה עשיר בקלוריות. זה לא אסור, כדאי לשים לב לכמות.</p>`],
+    ['book', 'ארוחות קבועות', `
+      <p>ארוחה שחוזרת כמעט כל יום אפשר לשמור, ואז לרשום אותה בלחיצה אחת.</p>
+      <p>כשאת אוכלת משהו דומה לימים אחרים, האפליקציה שואלת "זו כבר ארוחה קבועה?". לוחצים <b>לשמור</b> ונותנים שם.</p>
+      <p>ברישום ארוחה קבועה כל המאכלים מסומנים. מה שלא אכלת הפעם, מורידים את הסימון, והארוחה השמורה לא משתנה.</p>`],
+    ['pen', 'טעיתי, איך מתקנים', `
+      <p>אחרי כל רישום מופיעה למטה הודעה עם <b>ביטול</b>. לוחצים עליה, והרישום יורד.</p>
+      <p>אפשר גם ללחוץ על מאכל במסך היום, ואז לשנות כמות, להעביר לארוחה אחרת, או ${b('trash', 'מחיקה')}.</p>`],
+    ['moon', 'סיום היום', `
+      <p>בסוף היום לוחצים ${b('moon', 'סיימתי את היום')}. מקבלים סיכום קצר ומילה טובה.</p>
+      <p>יום שנגמר מעל היעד זה בסדר גמור. מה שקובע הוא הממוצע של השבוע, ומחר יום חדש.</p>`],
+    ['tape', 'משקל ומדידה', `
+      <p><b>פעם בשבוע</b>, ביום המדידה, מופיע במסך היום כרטיס לרשום משקל והיקף מותניים. הכי טוב בבוקר, לפני שאוכלים.</p>
+      <p>בשאר הימים, עד אחת בצהריים, אפשר לרשום משקל. זה לא חובה.</p>
+      <p><b>המשקל קופץ?</b> זה נורמלי. מים ומלח מזיזים קילו ויותר מיום ליום. לכן האפליקציה מסתכלת על הממוצע של שבוע ועל המותניים.</p>`],
+    ['chart', 'התקדמות', `
+      <p>במסך ${b('chart', 'התקדמות')} יש גרף של המשקל, הממוצע השבועי, המותניים והניצחונות של השבוע.</p>`],
+    ['gear', 'הגדרות שימושיות', `
+      <p>לוחצים ${b('more', 'עוד')} ואז <b>הגדרות ויעד</b>:</p>
+      <ul>
+        <li><b>גודל טקסט</b>: אם קשה לקרוא, בוחרים גדול או ענק.</li>
+        <li><b>תזכורות</b>: הודעה בערב, רק אם עוד לא רשמת ארוחת ערב.</li>
+      </ul>
+      <p>הנתונים מגובים לבד. לא צריך לעשות כלום.</p>`],
+  ];
+  setView(`
+    <div class="card soft"><h3>שלום, זה המדריך של צלחת</h3>
+      <p class="note">לוחצים על נושא כדי לפתוח אותו. אין צורך לקרוא הכול: הכי חשוב זה "איך רושמים אוכל".</p></div>
+    <div class="guide">${topics.map(([ic, title, body], i) => `<details${i === 2 ? ' open' : ''}>
+      <summary>${icon(ic)}<span class="grow">${title}</span>${icon('chev', 'chev')}</summary>
+      <div class="gbody">${body}</div></details>`).join('')}</div>
+    <div class="card gold" style="margin-top:14px"><h3 class="row">${icon('pen')}משהו לא ברור או לא עובד?</h3>
+      <p class="note" style="color:var(--text)">כותבים את זה בבקשות לדניאל, והוא יתקן.</p>
+      <a class="btn block" href="#/requests" style="margin-top:10px">${icon('pen')}לכתוב בקשה</a></div>`);
+}
+
+/* ================= requests to Daniel ================= */
+/* She writes what to fix or improve; the list stays on her phone (settings
+   'requests') until she sends it as plain text through the share sheet
+   (WhatsApp). Daniel pastes it to Claude. Nothing goes to a server. */
+const REQ_TYPES = { bug: 'משהו לא עובד', idea: 'רעיון לשיפור' };
+const REQ_WHERE = ['היום', 'הוספה', 'מתכונים', 'התקדמות', 'הגדרות', 'אחר'];
+function requestsText(list) {
+  const d = new Date();
+  const head = `בקשות מאמא לצלחת (גרסה ${CFG.VERSION}, ${fmtDateShort(C.ymd(d))}.${d.getFullYear()})`;
+  return head + '\n\n' + list.map((r, i) => `${i + 1}. ${REQ_TYPES[r.type] || ''}${r.where ? ' · מסך ' + r.where : ''} · ${fmtDateShort(C.ymd(new Date(r.createdAt)))}\n${r.text}`).join('\n\n');
+}
+async function viewRequests() {
+  setTitle('בקשות לדניאל');
+  const st = { type: 'bug', where: '' };
+  const load = async () => (await DB.loadSettings()).requests || [];
+  const store = (items) => DB.saveSetting('requests', items);
+  let list = await load();
+  const draw = () => {
+    const waiting = list.filter((r) => !r.sentAt);
+    const sorted = [...list].sort((a, b) => b.createdAt - a.createdAt);
+    setView(`
+      <div class="card"><h3>מה לתקן או לשפר?</h3>
+        <p class="note" style="margin-bottom:10px">כותבים במילים שלך, כמו בהודעה. אפשר לרשום כמה בקשות ולשלוח לדניאל כשרוצים.</p>
+        <div class="seg">${Object.entries(REQ_TYPES).map(([k, v]) => `<button class="${st.type === k ? 'on' : ''}" data-act="type" data-v="${k}">${v}</button>`).join('')}</div>
+        <div class="bold small" style="margin:14px 2px 6px">באיזה מסך? (לא חובה)</div>
+        <div class="chips wrap">${REQ_WHERE.map((w) => `<button class="chip ${st.where === w ? 'on' : ''}" data-act="where" data-v="${w}">${w}</button>`).join('')}</div>
+        <label class="field" style="margin-top:14px"><span>${st.type === 'bug' ? 'מה קרה?' : 'מה היה עוזר לך?'}</span>
+          <textarea id="rtext" rows="4" placeholder="${st.type === 'bug' ? 'למשל: לחצתי על חביתה והכמות לא השתנתה' : 'למשל: הייתי רוצה לראות כמה חלבון יש בכל ארוחה'}"></textarea></label>
+        <div class="row">
+          ${speechSupported() ? `<button class="btn ghost" data-act="mic" style="padding:0 16px">${icon('mic')}להגיד</button>` : ''}
+          <button class="btn grow" data-act="add">${icon('check')}לשמור בקשה</button>
+        </div></div>
+
+      ${list.length ? `<h2 class="section">${icon('list')}הבקשות שלי</h2>
+        ${sorted.map((r) => `<div class="card req">
+          <div class="row" style="gap:8px; flex-wrap:wrap">
+            <span class="pill ${r.type === 'bug' ? 'warn' : 'good'}">${REQ_TYPES[r.type]}</span>
+            ${r.where ? `<span class="faint small">מסך ${esc(r.where)}</span>` : ''}
+            <span class="grow"></span>
+            <button class="iconbtn" data-act="drop" data-id="${r.id}" aria-label="מחיקה">${icon('trash')}</button>
+          </div>
+          <p class="rtext">${esc(r.text)}</p>
+          <div class="faint small">${r.sentAt ? `נשלח לדניאל ב-${fmtDateShort(C.ymd(new Date(r.sentAt)))}` : 'עוד לא נשלח'}</div>
+        </div>`).join('')}
+        ${waiting.length
+          ? `<button class="btn block" data-act="send">${icon('share')}לשלוח לדניאל${waiting.length > 1 ? ` ${waiting.length} בקשות` : ''}</button>`
+          : `<p class="note center">כל הבקשות נשלחו. דניאל יעדכן כשזה מתוקן.</p>
+             <div class="center"><button class="linkbtn" data-act="resend">לשלוח שוב את כולן</button></div>`}` : ''}`);
+  };
+  const share = async (items) => {
+    const text = requestsText(items);
+    try {
+      if (navigator.share) await navigator.share({ text });
+      else window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
+    } catch (e) {
+      if (e && e.name === 'AbortError') return false;
+      try { await navigator.clipboard.writeText(text); toast('הועתק. אפשר להדביק בוואטסאפ לדניאל'); } catch (_) { toast('לא הצלחתי לשתף'); return false; }
+    }
+    return true;
+  };
+  VIEW.onclick = async (ev) => {
+    const b = ev.target.closest('[data-act]');
+    if (!b) return;
+    const act = b.dataset.act;
+    const typed = () => ($('#rtext') ? $('#rtext').value : '');
+    if (act === 'type' || act === 'where') {
+      const text = typed();
+      if (act === 'type') st.type = b.dataset.v; else st.where = st.where === b.dataset.v ? '' : b.dataset.v;
+      draw(); $('#rtext').value = text;
+    } else if (act === 'mic') {
+      dictate((txt) => { const t = $('#rtext'); t.value = (t.value ? t.value.trim() + ' ' : '') + txt; }, b);
+    } else if (act === 'add') {
+      const text = typed().trim();
+      if (!text) { toast('כתבי מה לתקן או לשפר'); $('#rtext').focus(); return; }
+      list = [...(await load()), { id: uid('r'), type: st.type, where: st.where, text: text.slice(0, 2000), createdAt: Date.now(), sentAt: null }];
+      await store(list);
+      st.where = '';
+      vibrate(); toast('נשמר. אפשר להוסיף עוד או לשלוח');
+      draw();
+    } else if (act === 'drop') {
+      const gone = list.find((r) => r.id === b.dataset.id);
+      list = list.filter((r) => r.id !== b.dataset.id);
+      await store(list); draw();
+      toast('הבקשה ירדה מהרשימה', { label: 'ביטול', fn: async () => { list = [...(await load()), gone]; await store(list); draw(); } });
+    } else if (act === 'send' || act === 'resend') {
+      const items = act === 'send' ? list.filter((r) => !r.sentAt) : list;
+      if (!items.length) return;
+      if (!(await share([...items].sort((x, y) => x.createdAt - y.createdAt)))) return;
+      const now = Date.now(), ids = new Set(items.map((r) => r.id));
+      list = list.map((r) => (ids.has(r.id) ? { ...r, sentAt: now } : r));
+      await store(list); draw();
+    }
+  };
+  draw();
 }
 
 async function viewSettings() {

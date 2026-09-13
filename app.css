@@ -352,3 +352,23 @@ input::placeholder,textarea::placeholder{color:#b9aea3; font-weight:400}
 .daynote .coach:not(.wait){animation:fadein .35s ease-out}
 @keyframes fadein{from{opacity:0} to{opacity:1}}
 @media (prefers-reduced-motion: reduce){ .daynote .skl,.daynote .coach{animation:none} }
+
+/* ---------- guide ---------- */
+.guide details{background:var(--card); border:1px solid var(--hair); border-radius:var(--r-card);
+  margin-bottom:10px; box-shadow:var(--sh1); overflow:hidden}
+.guide summary{display:flex; align-items:center; gap:12px; min-height:60px; padding:6px 16px;
+  font-weight:800; font-size:1.05rem; cursor:pointer; list-style:none}
+.guide summary::-webkit-details-marker{display:none}
+.guide summary>.ic:first-child{color:var(--accent)}
+.guide summary .chev{color:var(--faint); transform:rotate(-90deg); transition:transform .15s}
+.guide details[open] summary .chev{transform:rotate(90deg)}
+.guide .gbody{padding:0 16px 14px; line-height:1.65}
+.guide .gbody p{margin:0 0 10px}
+.guide .gbody ol,.guide .gbody ul{margin:0 0 10px; padding-inline-start:22px}
+.guide .gbody li{margin-bottom:8px}
+.gbtn{display:inline-flex; align-items:center; gap:4px; padding:1px 9px; border-radius:10px;
+  background:var(--accent-soft); color:var(--accent); font-weight:700; white-space:nowrap}
+.gbtn .ic{color:var(--accent)}
+
+/* ---------- requests ---------- */
+.req .rtext{margin:8px 0 6px; line-height:1.55; white-space:pre-wrap; color:var(--text)}
