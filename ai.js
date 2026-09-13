@@ -4,7 +4,8 @@
    CFG.API_URL is empty. */
 (function (root) {
   const r1 = (x) => Math.round(x * 10) / 10;
-  function enabled() { return !!(root.CFG && root.CFG.API_URL); }
+  /* Needs her Worker AND a Gemini key on it (reported by /ping at boot). */
+  function enabled() { return !!(root.CFG && root.CFG.API_URL && root.APP && root.APP.ui && root.APP.ui.aiReady === true); }
 
   async function call(kind, payload) {
     const auth = await root.Cloud.authHeader();

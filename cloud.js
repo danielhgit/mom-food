@@ -146,6 +146,13 @@
   }
 
   async function onBoot() {
+    try {
+      const st = await fetch(url('/ping')).then((r) => r.json());
+      if (!!st.ai !== (root.APP.ui.aiReady === true)) {
+        await root.saveUi({ aiReady: !!st.ai });
+        if (typeof root.rerender === 'function') root.rerender();
+      }
+    } catch (_) {}
     await authHeader();
     await backup(false).catch(() => {});
     await heartbeat(true).catch(() => {});
