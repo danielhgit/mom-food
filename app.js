@@ -922,6 +922,18 @@ function registerSW() {
     const go = () => { sessionStorage.setItem('mf.updated', '1'); location.reload(); };
     if (modalOpen()) APP.reloadPending = go; else go();
   });
+  // safety net: page running a different version than the installed cache → reload once
+  if (location.hostname !== 'localhost' && window.caches) {
+    navigator.serviceWorker.ready.then(() => caches.keys()).then((keys) => {
+      const cur = keys.find((k) => k.startsWith('mom-'));
+      if (cur && cur !== 'mom-' + CFG.VERSION && !sessionStorage.getItem('mf.vfix')) {
+        sessionStorage.setItem('mf.vfix', '1');
+        if (!modalOpen()) location.reload();
+      } else if (cur === 'mom-' + CFG.VERSION) {
+        sessionStorage.removeItem('mf.vfix');
+      }
+    }).catch(() => {});
+  }
 }
 
 /* ================= boot ================= */
