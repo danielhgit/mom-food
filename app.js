@@ -77,7 +77,7 @@ function toast(msg, action) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(hideToast, action ? 5000 : 2600);
 }
-function hideToast() { $('#toast').classList.remove('show'); }
+function hideToast() { if (window.Tour && Tour.holdsToast()) return; $('#toast').classList.remove('show'); }
 
 /* ---------------- bottom sheet ----------------
    Opening pushes one history entry so the Android back button closes the
@@ -338,6 +338,7 @@ async function route(keepScroll) {
   $('#backbtn').hidden = TOP_ROUTES.has(r) || r === 'setup';
   $('#nav').hidden = r === 'setup' || (r === 'backup' && !APP.ui.onboarded);
   setTopAction(null);
+  $('#helpbtn').hidden = !(window.Tour && Tour.forRoute(r).length) || !APP.ui.onboarded;
   VIEW.onclick = null; VIEW.oninput = null; VIEW.onchange = null;
   if (!keepScroll) setView('<div class="sk"></div><div class="sk" style="height:80px"></div><div class="sk" style="height:200px"></div>');
   renderBasket();
@@ -418,6 +419,7 @@ function openFoodSheet(view, opts = {}) {
     `);
     body.onclick = onClick;
     body.oninput = onInput;
+    if (window.Tour && mode !== 'pick') Tour.tip('qty', '#modalbody .stepper', 'כאן משנים כמות. פלוס מוסיף, מינוס מוריד.');
   };
   const refresh = () => {
     const n = C.nutrition(view.per100, st.grams);
@@ -496,6 +498,7 @@ function openConfirmList(items, opts = {}) {
     `);
     body.onclick = onClick;
     body.oninput = onInput;
+    if (window.Tour && checklist) Tour.tip('untick', '#clrows .tick', 'מה שלא אכלת הפעם, לוחצים על הסימון והוא יורד.');
   };
   const rowHtml = (x, i) => {
     if (!x.food) {
@@ -986,6 +989,21 @@ async function renderBasket() {
         onSaved: () => { APP.basket = []; APP.planMode = false; saveBasket(); renderBasket(); goHome(); },
       });
     }
+  };
+}
+
+/* ================= help: "תראי לי איך" ================= */
+function openHelpSheet() {
+  const r = parseHash().parts[0] || '';
+  const tours = Tour.forRoute(r);
+  const body = openModal(`<h3>במה לעזור?</h3>
+    <p class="note" style="margin:-4px 0 10px">בוחרים, והאפליקציה מראה על המסך איפה ללחוץ.</p>
+    ${tours.map((t) => `<button class="action" data-tour="${t.id}">${icon(t.icon)}<span class="grow"><b>${esc(t.title)}</b><br><span class="faint small">${esc(t.sub)}</span></span>${icon('chev', 'chev')}</button>`).join('')}
+    <a class="btn block ghost" href="#/guide" style="margin-top:10px">${icon('list')}כל ההדרכות</a>`);
+  body.onclick = (ev) => {
+    const b = ev.target.closest('[data-tour]');
+    if (b) Tour.start(b.dataset.tour);
+    else if (ev.target.closest('a[href="#/guide"]')) closeModal(true);
   };
 }
 
