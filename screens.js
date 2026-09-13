@@ -1174,6 +1174,8 @@ async function viewSetup(parts, params) {
     sessionStorage.removeItem('mf.setup');
     applyTextSize();
     location.hash = '#/';
+    // connect to her server now, not only on the next app open
+    if (window.Cloud && Cloud.enabled()) Cloud.onBoot().catch(() => {});
   };
 }
 function seedGrams(f) { return f.lastPortion ? f.lastPortion.grams * (f.lastPortion.count || 1) : (f.lastGrams || 100); }
