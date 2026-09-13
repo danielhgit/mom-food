@@ -448,7 +448,7 @@ async function viewAdd(parts, params) {
   }
 }
 function aiErrorText(e) {
-  if (e && e.status === 429) return 'העזרה החכמה עמוסה, אפשר לנסות שוב בעוד דקה';
+  if (e && (e.status === 429 || e.status === 503)) return 'העזרה החכמה עמוסה, אפשר לנסות שוב בעוד דקה';
   if (!online()) return 'אין אינטרנט כרגע';
   return 'לא הצלחתי. אפשר לנסות שוב או לכתוב במילים';
 }
