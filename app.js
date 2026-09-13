@@ -329,6 +329,7 @@ let routing = 0;
 async function route(keepScroll) {
   closeModal(true);
   const my = ++routing;
+  APP.rendering = true;              // tour.js waits for the screen before deciding a button is missing
   const { parts, params } = parseHash();
   let r = parts[0] || '';
   if (!APP.profile || !APP.ui.onboarded) {
@@ -350,6 +351,7 @@ async function route(keepScroll) {
     if (my === routing) setView(`<div class="empty">${icon('x', 'lg')}<br>משהו השתבש: ${esc(e.message)}<br><br><button class="btn ghost" onclick="route()">לנסות שוב</button></div>`);
   }
   if (!keepScroll) window.scrollTo(0, 0);
+  if (my === routing) { APP.rendering = false; APP.renderedAt = Date.now(); }
 }
 function rerender() {
   const y = window.scrollY;

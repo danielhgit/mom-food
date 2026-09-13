@@ -11,6 +11,8 @@
     for (const el of document.querySelectorAll(sel)) { const r = el.getBoundingClientRect(); if (r.width && r.height) return el; }
     return null;
   };
+  const onAdd = () => (location.hash || '').startsWith('#/add');
+  const todayEntries = async () => DB.byIndex('entries', 'date', Calc.ymd());
   const toastStep = { el: '#toast.show', text: 'נרשם. אם טעית, לוחצים כאן על "ביטול". אם הכול בסדר, לא צריך לעשות כלום.', wait: 'next' };
 
   /* ---------------- the tasks ---------------- */
@@ -18,7 +20,7 @@
     {
       id: 'log', icon: 'plus', title: 'לרשום מאכל', sub: 'מה שאכלת, בשלוש לחיצות', routes: ['', 'add'],
       steps: [
-        { route: '#/', el: '#nav a.center', text: 'כדי לרשום אוכל, לוחצים על הכפתור הירוק.', wait: 'tap' },
+        { route: '#/', el: '#nav a.center', skipIf: onAdd, text: 'כדי לרשום אוכל, לוחצים על הכפתור הירוק.', wait: 'tap' },
         { el: '#aslot', text: 'כאן בוחרים לאיזו ארוחה. הארוחה של עכשיו כבר מסומנת.', wait: 'next' },
         { el: () => first('#home .tile[data-act="food"]'), skipIf: () => !first('#home .tile[data-act="food"]'),
           text: 'אלה המאכלים שלך. לוחצים על המאכל שאכלת.', wait: 'tap' },
@@ -49,9 +51,9 @@
         { route: '#/add', el: '#q', text: 'כותבים כאן את שם המאכל.',
           advanceWhen: () => $('#q') && $('#q').value.trim().length >= 2 && ($('#res [data-act="mohq"]') || first('#res [data-act="res"]')) },
         { el: '#res [data-act="mohq"]', skipIf: () => !$('#res [data-act="mohq"]'),
-          text: 'לא מצאת אצלך? לוחצים כאן, ומחפשים במאגר הגדול.', wait: 'either' },
-        { el: () => first('#res [data-act="res"]'), missing: 'לא נמצא מאכל בשם הזה. אפשר לנסות מילה אחרת.',
-          text: 'לוחצים על המאכל הכי מתאים.', wait: 'tap' },
+          text: 'המאכל ברשימה? לוחצים עליו. לא מצאת? לוחצים על הכפתור הזה, ומחפשים במאגר הגדול.', wait: 'either', free: '#res' },
+        { el: () => first('#res [data-act="res"]'), skipIf: () => !!$('#modal.show'), missing: 'לא נמצא מאכל בשם הזה. אפשר לנסות מילה אחרת.',
+          text: 'לוחצים על המאכל הכי מתאים.', wait: 'tap', free: '#res' },
         { el: '#modalbody .stepper', text: 'כאן משנים כמות. פלוס מוסיף, מינוס מוריד.', wait: 'next' },
         { el: '#modalbody [data-act="save"]', text: 'לוחצים כאן, והמאכל נרשם ונשמר אצלך לפעם הבאה.', wait: 'tap' },
         toastStep,
@@ -60,6 +62,7 @@
     },
     {
       id: 'fix', icon: 'pen', title: 'לתקן או למחוק', sub: 'כשרשמת משהו לא נכון', routes: [''],
+      unavailable: async () => ((await todayEntries()).length ? null : 'עוד לא רשמת היום כלום, אז אין מה לתקן. אחרי שתרשמי משהו, אפשר לחזור להדרכה הזו.'),
       steps: [
         { route: '#/', el: () => first('#view .entry'), missing: 'עוד לא רשמת היום כלום. אחרי שתרשמי, אפשר לחזור להדרכה הזו.',
           text: 'כדי לתקן, לוחצים על המאכל.', wait: 'tap' },
@@ -73,6 +76,11 @@
     },
     {
       id: 'close', icon: 'moon', title: 'לסגור את היום', sub: 'בסוף היום, סיכום ומילה טובה', routes: [''],
+      unavailable: async () => {
+        if (!(await todayEntries()).length) return 'את היום סוגרים אחרי שרושמים בו משהו. אחרי הארוחה הראשונה, אפשר לחזור להדרכה הזו.';
+        const day = await DB.get('days', Calc.ymd());
+        return day && day.closed ? 'היום כבר סגור. מחר אפשר לחזור להדרכה הזו.' : null;
+      },
       steps: [
         { route: '#/', el: '#view [data-act="close"]', missing: 'הכפתור לסגירת היום מופיע אחרי שרושמים משהו, וכל עוד היום פתוח.',
           text: 'בסוף היום, אחרי הארוחה האחרונה, לוחצים כאן.', wait: 'tap' },
@@ -128,7 +136,8 @@
   }
 
   let run = null;     // { tour, i, step, el, raf, poll, lostAt, tip }
-  const WAIT_MS = 8000;
+  const WAIT_MS = 5000;     // longest wait for a sheet or screen to show a button
+  const GRACE_MS = 600;     // after the screen finished drawing, a missing button is missing
 
   function resolve(step) {
     const el = typeof step.el === 'function' ? step.el() : first(step.el);
@@ -162,7 +171,7 @@
       el = run.el = resolve(run.step);
       if (!el) {
         run.lostAt = run.lostAt || Date.now();
-        if (Date.now() - run.lostAt > 1500) { end(false, 'ההדרכה נעצרה. אפשר להתחיל שוב מתי שרוצים.'); return; }
+        if (Date.now() - run.lostAt > 1500) { if (run.tip) end(true); else end(false, 'ההדרכה נעצרה. אפשר להתחיל שוב מתי שרוצים.'); return; }
       } else run.lostAt = 0;
     }
     if (el) {
@@ -207,8 +216,16 @@
     }
     layer.hidden = true;
     const started = Date.now();
+    const navigates = !!step.route || run.i === 0;
     run.poll = setInterval(() => {
       const el = resolve(step);
+      // the screen is drawn and the button is not there: say so now, don't make her wait
+      const drawn = !APP.rendering && Date.now() - Math.max(started, APP.renderedAt || 0) > GRACE_MS;
+      if (!el && navigates && drawn && step.missing) {
+        clearInterval(run.poll);
+        end(false, step.missing);
+        return;
+      }
       if (el) {
         clearInterval(run.poll);
         run.el = el;
@@ -218,7 +235,7 @@
         }
       } else if (Date.now() - started > WAIT_MS) {
         clearInterval(run.poll);
-        end(false, step.missing || 'לא מצאתי את הכפתור במסך. אפשר לנסות שוב מתי שרוצים.');
+        end(false, step.missing || 'ההדרכה נעצרה. אפשר להתחיל שוב מתי שרוצים.');
       }
     }, 150);
   }
@@ -227,13 +244,10 @@
   /* Taps: inside the lit element or the bubble go through; everything else is
      swallowed, and the light pulses to show where to tap. */
   function guard(ev) {
-    if (!run || layer.hidden) {
-      if (run && !run.tip) { ev.preventDefault(); ev.stopPropagation(); }   // between steps: wait
-      return;
-    }
+    if (!run || layer.hidden) return;      // between steps nothing is lit: taps work normally
     if (bubble.contains(ev.target)) return;
     const el = run.el;
-    const inside = el && el.contains(ev.target);
+    const inside = el && el.contains(ev.target) || (run.step.free && ev.target.closest && ev.target.closest(run.step.free));
     const toastUndo = run.step.el === '#toast.show' && ev.target.closest && ev.target.closest('#toast');
     if (inside || toastUndo) {
       if (ev.type === 'click' && (run.step.wait === 'tap' || run.step.wait === 'either')) {
@@ -247,10 +261,12 @@
     if (ev.type === 'click') { layer.classList.add('pulse'); setTimeout(() => layer && layer.classList.remove('pulse'), 900); }
   }
 
-  function start(id) {
+  async function start(id) {
     const tour = TOURS.find((t) => t.id === id);
     if (!tour) return;
-    const why = tour.unavailable && tour.unavailable();
+    if (window.modalOpen && modalOpen()) closeModal();
+    let why = null;
+    try { why = tour.unavailable ? await tour.unavailable() : null; } catch (_) {}
     if (why) { toast(why); return; }
     build();
     if (run) end(false);

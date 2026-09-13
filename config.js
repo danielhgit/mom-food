@@ -2,7 +2,7 @@
    API_URL empty = smart help, reminders and cloud backup are hidden and the
    app runs fully offline on the phone. */
 window.CFG = {
-  VERSION: '0846dcd4',
+  VERSION: '6c13d3b3',
   API_URL: 'https://tzalahat-api.daniel2009ha.workers.dev',
   VAPID_PUBLIC: 'BG0PEA4FQ1HPvcMrW1ORQQnXOiZWoys-xZ2g0jNpYjedvfbGSZDFcrgygBAqIeNbAsnK0AxunNfNORecBSDgiJg',       // Web Push public key (base64url)
 };
