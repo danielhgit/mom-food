@@ -338,3 +338,17 @@ input::placeholder,textarea::placeholder{color:#b9aea3; font-weight:400}
 .hint{display:flex; gap:10px; align-items:flex-start; background:var(--accent-soft); border-radius:14px;
   padding:10px 12px; margin:8px 0 6px}
 .hint>.ic{color:var(--accent); margin-top:2px}
+
+/* ---------- day close: forecast + personal note in one green card ---------- */
+.daynote p{margin:0; line-height:1.6; color:var(--text)}
+.daynote .forecast{font-size:.92rem}
+.daynote .forecast + .coach{margin-top:12px; padding-top:12px; border-top:1px solid rgba(31,90,72,.16)}
+.daynote .coach{font-size:1rem}
+.daynote .coach.wait{display:flex; flex-direction:column; gap:8px; padding-block:4px}
+.daynote .skl{display:block; height:12px; width:92%; border-radius:6px;
+  background:linear-gradient(100deg,rgba(31,90,72,.08) 30%,rgba(31,90,72,.18) 50%,rgba(31,90,72,.08) 70%);
+  background-size:200% 100%; animation:shimmer 1.4s infinite linear}
+.daynote .skl.short{width:64%}
+.daynote .coach:not(.wait){animation:fadein .35s ease-out}
+@keyframes fadein{from{opacity:0} to{opacity:1}}
+@media (prefers-reduced-motion: reduce){ .daynote .skl,.daynote .coach{animation:none} }

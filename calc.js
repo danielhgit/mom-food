@@ -301,16 +301,56 @@
     return out;
   }
 
-  /* Offline fallback for the coach note: two warm sentences, never "חרגת". */
-  function coachLocal({ kcal, target, protein, proteinGoal, weekAvg, streakDays }) {
-    const first = kcal <= target
-      ? 'יום בתוך התקציב, כל הכבוד.'
-      : 'רשמת הכול, וזה הדבר הכי חשוב.';
+  /* What the day-close note is built from, besides today's numbers: how this
+     day compares with her usual days, and what she already eats that has protein. */
+  function coachFacts(entries, totalsMap, date, recentEntries) {
+    const meals = { breakfast: [], lunch: [], dinner: [], snack: [] };
+    for (const e of entries) {
+      const list = meals[e.slot] || meals.snack;
+      const same = list.find((x) => x.name === e.name);
+      if (same) { same.kcal += e.k || 0; same.protein += e.p || 0; }
+      else list.push({ name: e.name, kcal: e.k || 0, protein: e.p || 0 });
+    }
+    for (const list of Object.values(meals)) for (const x of list) { x.kcal = Math.round(x.kcal); x.protein = r1(x.protein); }
+    const y = totalsMap.get(addDays(date, -1));
+    const past = [];
+    for (let i = 1; i <= 14; i++) { const t = totalsMap.get(addDays(date, -i)); if (t) past.push(t); }
+    const dinners = past.map((t) => t.slots.dinner).filter((k) => k > 0);
+    // her own protein foods: at least 10 g protein per 100 kcal, a normal portion, most eaten
+    const count = new Map();
+    for (const e of recentEntries || []) {
+      if (!e.k || e.k < 40 || e.k > 250 || (e.p || 0) * 10 < e.k || e.liquid) continue;
+      count.set(e.name, (count.get(e.name) || 0) + 1);
+    }
+    const proteinFood = [...count].sort((a, b) => b[1] - a[1]).map((x) => x[0])[0] || null;
+    return {
+      meals,
+      yesterday: y ? { kcal: Math.round(y.k), dinner: Math.round(y.slots.dinner) } : null,
+      dinnerAvg14: dinners.length >= 3 ? Math.round(mean(dinners)) : null,
+      breakfastDays14: past.filter((t) => t.slots.breakfast > 0).length,
+      proteinFood,
+    };
+  }
+
+  /* Offline fallback for the coach note, in the same voice as the Gemini one:
+     one specific good thing from today, one small idea for tomorrow. No numbers
+     (they are on the screen above it), never "חרגת". */
+  function coachLocal({ protein, proteinGoal, streakDays, meals, yesterday, dinnerAvg14, proteinFood }) {
+    const m = meals || { breakfast: [], lunch: [], dinner: [], snack: [] };
+    const total = (list) => list.reduce((s, x) => s + x.kcal, 0);
+    const dinner = total(m.dinner);
+    const lunchTop = [...m.lunch].sort((a, b) => b.protein - a.protein)[0];
+    let first;
+    if (dinner > 0 && dinnerAvg14 && dinner <= dinnerAvg14 * 0.85) first = 'ארוחת הערב הייתה קלה מהרגיל.';
+    else if (dinner > 0 && yesterday && yesterday.dinner && dinner <= yesterday.dinner * 0.85) first = 'ארוחת הערב הייתה קלה יותר מאתמול.';
+    else if (lunchTop && lunchTop.protein >= 20) first = `בצהריים היה חלבון טוב, עם ${lunchTop.name}.`;
+    else if (m.dinner.some((x) => x.name.includes('יין'))) first = 'רשמת גם את היין, ככה רואים את התמונה האמיתית.';
+    else if (dinner > 0 && !m.snack.length) first = 'היום עבר בלי נשנושים בין הארוחות.';
+    else first = 'רשמת את כל היום, וזה מה שעושה את ההבדל.';
     let second;
-    if (kcal > target && weekAvg) second = `מה שקובע הוא הממוצע השבועי, והוא עומד על ${fmt(weekAvg.avg)}.`;
-    else if (proteinGoal && protein < proteinGoal * 0.8) second = 'מחר אפשר להוסיף קצת חלבון בצהריים, זה משביע לקראת הערב.';
-    else if (streakDays >= 3) second = `${streakDays} ימים ברצף, ממשיכות ככה.`;
-    else second = 'מחר יום חדש, ממשיכים באותה דרך.';
+    if (proteinGoal && protein < proteinGoal * 0.8) second = `מחר אפשר להוסיף ${proteinFood || 'ביצה או קוטג\''} לצהריים, זה מחזיק עד הערב.`;
+    else if (streakDays >= 3) second = 'עוד יום ברצף של רישום, ממשיכות ככה.';
+    else second = 'מחר ממשיכים באותה דרך.';
     return first + ' ' + second;
   }
 
@@ -322,7 +362,7 @@
     nutrition, sum, density, recipeNutrition,
     dayTotals, loggedSet, streak, weekAverage,
     avgWindow, kgNow, weightSeries, forecast, calibration,
-    eveningCombos, wins, scaleNote, milestones, coachLocal,
+    eveningCombos, wins, scaleNote, milestones, coachFacts, coachLocal,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.Calc = api;

@@ -311,9 +311,14 @@ function openCloseDay(ctx, date, entries) {
   const streakDays = C.streak(C.loggedSet(ctx.totals, [...closedPlus]), ctx.t);
   const tdee = C.currentTdee(APP.profile, ctx.kg, ctx.t);
   const avg7 = C.avgWindow(ctx.weights, ctx.t, 7) ?? ctx.kg;
-  let note = C.coachLocal({ kcal: tot.k, target: ctx.target, protein: tot.p, proteinGoal: ctx.pGoal, weekAvg, streakDays });
+  const facts = C.coachFacts(entries, ctx.totals, date, ctx.recent.filter((e) => e.date >= C.addDays(date, -30)));
+  let note = C.coachLocal({ protein: tot.p, proteinGoal: ctx.pGoal, streakDays, ...facts });
+  // Gemini writes the note when it can. Until it answers (or gives up) the card shows
+  // a quiet placeholder, so the text never changes in front of her.
+  const askAi = !!(window.AI && AI.enabled() && APP.ui.aiEnabled !== false && online());
   // only for a fully logged day: a half-logged 900 kcal day would promise a fantasy
   const forecast = entries.length >= 3 && tot.k >= ctx.target * 0.8 && tot.k < tdee ? C.forecast(avg7, tdee, tot.k) : null;
+  const showForecast = forecast != null && forecast < avg7;
   const body = openModal(`<h3>סיכום היום</h3>
     <div class="card flat" style="margin-bottom:10px">
       <div class="kv"><span>קלוריות</span><b><span class="n">${fmt(tot.k)}</span> מתוך <span class="n">${fmt(ctx.target)}</span></b></div>
@@ -321,15 +326,29 @@ function openCloseDay(ctx, date, entries) {
       ${weekAvg ? `<div class="kv"><span>ממוצע השבוע</span><b class="n">${fmt(weekAvg.avg)}</b></div>` : ''}
       ${streakDays >= 2 ? `<div class="kv"><span>ימים ברצף</span><b class="n">${streakDays}</b></div>` : ''}
     </div>
-    ${forecast != null && forecast < avg7 ? `<div class="card good note" style="color:var(--text)">אם כל יום ייראה כמו היום, בעוד 5 שבועות המשקל יהיה בערך <b class="n">${fmt1(forecast)}</b> ק״ג.</div>` : ''}
-    <div class="card gold"><div class="row" style="align-items:flex-start">${icon('sparkle')}<span id="coach" class="grow">${esc(note)}</span></div></div>
+    <div class="card good daynote">
+      ${showForecast ? `<p class="forecast">אם כל יום ייראה כמו היום, בעוד 5 שבועות המשקל יהיה בערך <b class="n">${fmt1(forecast)}</b> ק״ג.</p>` : ''}
+      <p id="coach" class="coach${askAi ? ' wait' : ''}">${askAi ? '<span class="skl"></span><span class="skl short"></span>' : esc(note)}</p>
+    </div>
     <button class="btn block goodbtn" data-act="close">${icon('check')}לסגור את היום</button>`);
-  if (window.AI && AI.enabled() && APP.ui.aiEnabled !== false && online()) {
+  if (askAi) {
+    const show = (txt) => {
+      const el = $('#coach');
+      if (!el || !el.classList.contains('wait')) return;
+      if (txt) note = txt;
+      el.classList.remove('wait');
+      el.textContent = note;
+    };
+    const prevAvg = C.avgWindow(ctx.weights, C.addDays(ctx.t, -7), 7);
+    const recent = ctx.days.filter((d) => d.coachNote && d.date < date).sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 3).map((d) => d.coachNote);
     AI.coach({ kind: 'day', kcal: tot.k, target: ctx.target, protein: tot.p, proteinGoal: ctx.pGoal,
       weekAvg: weekAvg && weekAvg.avg, streak: streakDays,
-      weightTrend: C.avgWindow(ctx.weights, C.addDays(ctx.t, -7), 7) != null ? C.r1(avg7 - C.avgWindow(ctx.weights, C.addDays(ctx.t, -7), 7)) : null,
+      weightTrend: prevAvg != null && avg7 != null ? C.r1(avg7 - prevAvg) : null,
       slots: C.dayTotals(entries).get(date)?.slots,
-    }).then((txt) => { if (txt && $('#coach')) { note = txt; $('#coach').textContent = txt; } }).catch(() => {});
+      meals: facts.meals, yesterday: facts.yesterday, dinnerAvg14: facts.dinnerAvg14,
+      breakfastDays14: facts.breakfastDays14, recent,
+    }).then(show, () => show(null));
+    setTimeout(() => show(null), 12000);
   }
   body.onclick = async (ev) => {
     if (!ev.target.closest('[data-act="close"]')) return;
