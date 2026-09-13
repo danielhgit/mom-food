@@ -292,7 +292,16 @@ input::placeholder,textarea::placeholder{color:#b9aea3; font-weight:400}
 .steps{display:flex; gap:6px; justify-content:center; margin:6px 0 16px}
 .steps span{width:30px; height:5px; border-radius:3px; background:var(--line)}
 .steps span.on{background:var(--accent)}
-video.scan{width:100%; border-radius:16px; background:#000; max-height:46vh; object-fit:cover}
+.scanbox{position:relative; border-radius:18px; overflow:hidden; background:#1d1915; aspect-ratio:4/3; max-height:52vh; width:100%}
+.scanbox video{width:100%; height:100%; object-fit:cover; display:block}
+.scanframe{position:absolute; left:9%; right:9%; top:28%; bottom:28%; border:3px solid rgba(255,255,255,.95);
+  border-radius:14px; box-shadow:0 0 0 999px rgba(0,0,0,.38); pointer-events:none}
+.scanframe::after{content:''; position:absolute; left:6%; right:6%; top:50%; height:2px; background:rgba(224,123,69,.9);
+  animation:scanline 1.6s ease-in-out infinite alternate}
+@keyframes scanline{from{transform:translateY(-38px)} to{transform:translateY(38px)}}
+.scantorch{position:absolute; top:10px; left:10px; width:48px; height:48px; border-radius:50%; border:none;
+  background:rgba(0,0,0,.5); color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer}
+.scantorch.on{background:var(--gold)}
 .kv{display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--hair)}
 .kv:last-child{border-bottom:none}
 .sk{border-radius:14px; background:linear-gradient(100deg,var(--card2) 30%,var(--inset) 50%,var(--card2) 70%);

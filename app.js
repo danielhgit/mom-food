@@ -644,49 +644,131 @@ function stopCamera() {
   clearTimeout(camTimer); camTimer = null;
   if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null; }
 }
-async function barcodeSupported() {
-  if (!('BarcodeDetector' in window) || !navigator.mediaDevices) return false;
-  try { const f = await BarcodeDetector.getSupportedFormats(); return f.includes('ean_13'); } catch (_) { return false; }
+document.addEventListener('visibilitychange', () => { if (document.hidden) stopCamera(); });
+
+/* EAN-13 / EAN-8 / UPC-A check digit, so a half-read barcode never looks
+   up the wrong product. */
+function validBarcode(code) {
+  if (!/^\d{6,14}$/.test(code)) return false;
+  if (![8, 12, 13].includes(code.length)) return true;          // UPC-E and friends: no check here
+  const d = code.split('').map(Number);
+  const check = d.pop();
+  const sum = d.reverse().reduce((a, x, i) => a + x * (i % 2 === 0 ? 3 : 1), 0);
+  return (10 - (sum % 10)) % 10 === check;
 }
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = resolve; s.onerror = () => reject(new Error('load ' + src));
+    document.head.appendChild(s);
+  });
+}
+/* Chrome on most Android phones has a built-in barcode detector. Where it
+   doesn't, load the ZXing fallback from this site (vendor/), once. */
+let detectorP = null;
+function getDetector() {
+  if (detectorP) return detectorP;
+  const formats = ['ean_13', 'ean_8', 'upc_a', 'upc_e'];
+  detectorP = (async () => {
+    if ('BarcodeDetector' in window) {
+      try {
+        const supported = await BarcodeDetector.getSupportedFormats();
+        if (supported.includes('ean_13')) return { det: new BarcodeDetector({ formats }), native: true };
+      } catch (_) {}
+    }
+    await loadScript('vendor/barcode.js?v=' + CFG.VERSION);
+    return { det: new window.ZXingBarcodeDetector({ formats }), native: false };
+  })().catch((e) => { detectorP = null; throw e; });
+  return detectorP;
+}
+
 async function openBarcode(opts = {}) {
-  const canScan = await barcodeSupported();
+  const hasCamera = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
   const body = openModal(`
     <h3>סריקת ברקוד</h3>
-    ${canScan ? `<video class="scan" id="bcvideo" playsinline muted></video>
-      <div class="center faint" style="margin:6px 0 12px">מכוונים את המצלמה לברקוד שעל האריזה</div>` : ''}
-    <label class="field"><span>${canScan ? 'או להקליד את המספר' : 'המספר שמתחת לברקוד'}</span>
-      <input class="num" id="bccode" inputmode="numeric" placeholder="7290000000000"></label>
-    <button class="btn block" data-act="go">${icon('search')}לחפש</button>`);
-  body.onclick = (ev) => {
-    if (ev.target.closest('[data-act="go"]')) {
+    ${hasCamera ? `<div class="scanbox" id="bcbox">
+        <video id="bcvideo" playsinline muted autoplay></video>
+        <div class="scanframe"></div>
+        <button class="scantorch" data-act="torch" id="bctorch" hidden aria-label="פנס">${icon('bulb')}</button>
+      </div>
+      <div class="center bold" id="bcstatus" style="margin:10px 0 2px">פותחת מצלמה…</div>
+      <div class="center faint">מכניסים את הברקוד למסגרת, בערך כף יד מהטלפון</div>` : ''}
+    <div id="bcmanual" ${hasCamera ? 'hidden' : ''} style="margin-top:12px">
+      <label class="field"><span>המספר שמתחת לברקוד</span>
+        <input class="num" id="bccode" inputmode="numeric" placeholder="7290000000000"></label>
+      <button class="btn block" data-act="go">${icon('search')}לחפש</button>
+    </div>
+    ${hasCamera ? `<div class="center"><button class="linkbtn" data-act="type" id="bctype">${icon('pen', 'sm')}להקליד את המספר במקום</button></div>` : ''}`);
+
+  const status = (txt) => { const s = $('#bcstatus'); if (s) s.textContent = txt; };
+  const showManual = (msg) => {
+    const m = $('#bcmanual'); if (m) m.hidden = false;
+    const t = $('#bctype'); if (t) t.hidden = true;
+    if (msg) status(msg);
+    setTimeout(() => { const i = $('#bccode'); if (i) i.focus(); }, 150);
+  };
+  let torchOn = false;
+  body.onclick = async (ev) => {
+    const b = ev.target.closest('[data-act]');
+    if (!b) return;
+    if (b.dataset.act === 'type') showManual();
+    else if (b.dataset.act === 'torch') {
+      const track = camStream && camStream.getVideoTracks()[0];
+      if (!track) return;
+      torchOn = !torchOn;
+      try { await track.applyConstraints({ advanced: [{ torch: torchOn }] }); b.classList.toggle('on', torchOn); } catch (_) {}
+    } else if (b.dataset.act === 'go') {
       const code = ($('#bccode').value || '').replace(/\D/g, '');
       if (code.length < 8) { toast('מספר ברקוד קצר מדי'); return; }
+      if (!validBarcode(code)) { toast('נראה שיש טעות באחת הספרות'); return; }
       stopCamera(); lookupBarcode(code, opts);
     }
   };
-  if (canScan) {
-    try {
-      const det = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'] });
-      camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
-      const video = $('#bcvideo');
-      if (!video) { stopCamera(); return; }
-      video.srcObject = camStream;
-      await video.play();
-      const tick = async () => {
-        if (!camStream) return;
-        try {
-          const codes = await det.detect(video);
-          if (codes.length && codes[0].rawValue) { const c = codes[0].rawValue; vibrate(30); stopCamera(); lookupBarcode(c, opts); return; }
-        } catch (_) {}
-        camTimer = setTimeout(tick, 220);
-      };
-      tick();
-    } catch (e) {
-      stopCamera();
-      const v = $('#bcvideo'); if (v) v.remove();
-      toast('אין גישה למצלמה. אפשר להקליד את המספר');
-    }
+  if (!hasCamera) return;
+
+  let found;
+  try { found = await getDetector(); }
+  catch (e) { const box = $('#bcbox'); if (box) box.hidden = true; showManual('הסורק לא נטען (אולי אין אינטרנט). אפשר להקליד את המספר'); return; }
+  const { det, native } = found;
+
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ audio: false,
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+  } catch (e) {
+    const box = $('#bcbox'); if (box) box.hidden = true;
+    showManual(e.name === 'NotAllowedError' ? 'צריך לאשר גישה למצלמה. בינתיים אפשר להקליד' : 'לא נמצאה מצלמה. אפשר להקליד את המספר');
+    return;
   }
+  const video = $('#bcvideo');
+  if (!video || !modalOpen()) { stopCamera(); return; }
+  video.srcObject = camStream;
+  try { await video.play(); } catch (_) {}
+  const track = camStream.getVideoTracks()[0];
+  try {
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    if (caps.torch) $('#bctorch').hidden = false;
+    if (caps.focusMode && caps.focusMode.includes('continuous')) track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+  } catch (_) {}
+  status('מחפשת ברקוד…');
+
+  const started = Date.now();
+  const tick = async () => {
+    if (!camStream || !$('#bcvideo')) return;
+    try {
+      if (video.readyState >= 2) {
+        const codes = await det.detect(video);
+        const hit = codes.map((c) => String(c.rawValue || '').trim()).find(validBarcode);
+        if (hit) {
+          vibrate(40); stopCamera(); status('נמצא ' + hit);
+          lookupBarcode(hit, opts);
+          return;
+        }
+      }
+    } catch (_) {}
+    if (Date.now() - started > 20000) status('לא נקלט? להתקרב קצת, להוסיף אור, או להקליד את המספר');
+    camTimer = setTimeout(tick, native ? 180 : 260);
+  };
+  tick();
 }
 async function lookupBarcode(code, opts) {
   const mine = APP.lib.find((f) => f.barcode === code && !f.hidden);

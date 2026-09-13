@@ -360,7 +360,7 @@ async function viewAdd(parts, params) {
         </div>
       </div>
       <div class="actions">${[
-        `<button class="action" data-act="barcode">${icon('barcode')}ברקוד</button>`,
+        `<button class="action" data-act="barcode">${icon('barcode')}לסרוק ברקוד</button>`,
         aiOn ? `<button class="action" data-act="plate">${icon('camera')}לצלם צלחת</button>` : '',
         aiOn ? `<button class="action" data-act="label">${icon('label')}לצלם תווית</button>` : '',
         `<button class="action" data-act="quickk">${icon('bolt')}רק קלוריות</button>`,
