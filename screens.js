@@ -74,32 +74,16 @@ async function viewDay(date) {
   const dinnerLogged = entries.some((e) => e.slot === 'dinner');
   let html = '';
 
-  /* --- one-tap re-log --- */
-  const slotNow = nowSlot();
-  let quick = [];
-  if (isToday && !closed) {
-    quick = libFoods().filter((f) => f.useCount > 0 || (f.slotCounts && f.slotCounts[slotNow] > 0))
-      .sort((a, b) => ((b.slotCounts?.[slotNow] || 0) - (a.slotCounts?.[slotNow] || 0)) || ((b.lastUsed || 0) - (a.lastUsed || 0)))
-      .slice(0, 6);
-    if (quick.length) {
-      html += `<div class="spread" style="margin:0 4px 6px"><span class="bold">לרשום שוב ל${C.SLOT_HE[slotNow]}</span><span class="faint">לחיצה אחת</span></div>
-        <div class="chips" style="margin-bottom:6px">${quick.map((f) => {
-          const g = portionGrams(f);
-          const sub = f.lastPortion ? `${f.lastPortion.count && f.lastPortion.count !== 1 ? fmt1(f.lastPortion.count) + ' × ' : ''}${esc(f.lastPortion.name)}` : `${fmt(g)} ${f.liquid ? 'מ״ל' : 'גרם'}`;
-          return `<button class="chip quick" data-act="quick" data-id="${f.id}">
-            <span class="t">${dot(f.per100.k, f.liquid)}<span class="tt">${esc(compactName(f.name))}</span></span>
-            <span class="sub">${sub} · ${fmt(C.nutrition(f.per100, g).k)}</span></button>`;
-        }).join('')}</div>`;
-    } else if (!entries.length) {
-      html += `<div class="card soft"><h3>שמחה שאת כאן</h3>
-        <p class="note">מתחילים פשוט: רושמים את מה שאוכלים היום. כל מאכל שתרשמי נשמר, ובפעם הבאה הוא יופיע כאן ללחיצה אחת.</p>
-        <a class="btn block" href="#/add" style="margin-top:10px">${icon('plus')}לרשום את הארוחה הראשונה</a></div>`;
-    }
+  /* --- first day: a single friendly pointer to the add screen --- */
+  if (isToday && !closed && !entries.length && !libFoods().some((f) => f.useCount > 0)) {
+    html += `<div class="card soft"><h3>שמחה שאת כאן</h3>
+      <p class="note">מתחילים פשוט: רושמים את מה שאוכלים היום. כל מאכל שתרשמי נשמר במאכלים שלך, ובפעם הבאה הוא מחכה שם ללחיצה.</p>
+      <a class="btn block" href="#/add" style="margin-top:10px">${icon('plus')}לרשום את הארוחה הראשונה</a></div>`;
   }
 
   /* --- hero --- */
   const pct = tot.k / target;
-  const color = pct > 1 ? 'var(--accent2)' : pct > 0.9 ? 'var(--dens-y)' : 'var(--good)';
+  const color = pct > 1 ? 'var(--over)' : pct > 0.9 ? 'var(--dens-y)' : 'var(--good)';
   let mid;
   if (remaining < 0) mid = `<span class="dnum" style="color:var(--accent)">+${fmt(-remaining)}</span><span class="lbl">מעל היעד</span>`;
   else if (evening) mid = `<span class="dnum">${fmt(remaining)}</span><span class="lbl">נשאר לערב</span>`;
@@ -167,7 +151,7 @@ async function viewDay(date) {
         ${canAdd ? `<a class="iconbtn" href="#/add?slot=${s}${isToday ? '' : '&date=' + date}" aria-label="להוסיף ל${C.SLOT_HE[s]}" style="color:var(--accent)">${icon('plus')}</a>` : ''}
       </div>
       ${list.length ? entriesHtml(list) : ''}
-      ${list.length >= 2 && !list.every((e) => e.mealId) ? `<button class="linkbtn small" data-act="savemeal" data-s="${s}">${icon('book', 'sm')}לשמור כמנה קבועה</button>` : ''}
+      ${list.length >= 2 && !list.every((e) => e.mealId) ? mealHintHtml(s, list, date, ctx) : ''}
     </div>`;
   }
 
@@ -201,14 +185,7 @@ async function viewDay(date) {
     const b = ev.target.closest('[data-act]');
     if (!b) return;
     const act = b.dataset.act;
-    if (act === 'quick') {
-      const f = APP.libById.get(b.dataset.id);
-      const g = portionGrams(f);
-      const es = await logFoods([{ food: f, grams: g, portion: f.lastPortion }], { slot: slotNow });
-      vibrate();
-      toast(`נרשם: ${shortName(f.name)} · ${fmt(es[0].k)}`, { label: 'ביטול', fn: () => undoEntries(es) });
-      rerender();
-    } else if (act === 'entry') {
+    if (act === 'entry') {
       const e = entries.find((x) => x.id === b.dataset.id);
       if (e) openEntrySheet(e);
     } else if (act === 'copyslot') {
@@ -231,7 +208,10 @@ async function viewDay(date) {
       openWeighSheet(ctx);
     } else if (act === 'savemeal') {
       const list = entries.filter((e) => e.slot === b.dataset.s && e.foodId);
-      openSaveMealSheet(list, C.SLOT_HE[b.dataset.s]);
+      openSaveMealSheet(list, b.dataset.s);
+    } else if (act === 'hintoff') {
+      await saveUi({ mealHintOff: [...(APP.ui.mealHintOff || []).slice(-30), date + ':' + b.dataset.s] });
+      rerender();
     } else if (act === 'close') {
       openCloseDay(ctx, date, entries);
     } else if (act === 'reopen') {
@@ -249,7 +229,7 @@ function entriesHtml(list) {
   let html = '', lastMeal = null;
   for (const e of list) {
     if (e.mealId && e.mealId !== lastMeal) {
-      html += `<div class="mealtag">${icon('book', 'sm')}${esc(e.mealName || 'מנה קבועה')}</div>`;
+      html += `<div class="mealtag">${icon('book', 'sm')}${esc(e.mealName || 'ארוחה קבועה')}</div>`;
     }
     lastMeal = e.mealId || null;
     const k100 = e.per100 ? e.per100.k : (e.grams ? e.k * 100 / e.grams : null);
@@ -281,19 +261,46 @@ function openWeighSheet(ctx) {
   };
 }
 
-function openSaveMealSheet(entries, slotName) {
-  const body = openModal(`<h3>לשמור כמנה קבועה</h3>
-    <p class="note">בפעם הבאה תוכלי לרשום את כל ${entries.length} המאכלים בלחיצה אחת.</p>
-    <label class="field"><span>שם המנה</span><input id="mname" value="${esc(slotName + ' רגיל')}"></label>
+/* "You ate almost this same meal on another day — keep it?" Shown when today's
+   foods in this meal overlap ≥60% (and 2+ foods) with a meal from the last
+   14 days, and no saved meal already covers it. */
+function mealHintHtml(slot, list, date, ctx) {
+  const ids = new Set(list.map((e) => e.foodId).filter(Boolean));
+  const jaccard = (a, b) => { let inter = 0; a.forEach((x) => { if (b.has(x)) inter++; }); return { j: inter / (a.size + b.size - inter || 1), inter }; };
+  const covered = APP.meals.some((m) => jaccard(ids, new Set(m.items.map((x) => x.foodId))).j >= 0.6);
+  const off = (APP.ui.mealHintOff || []).includes(date + ':' + slot);
+  const byDay = new Map();
+  for (const e of ctx.recent) {
+    if (e.slot !== slot || e.date >= date || !e.foodId || C.diffDays(e.date, date) > 14) continue;
+    if (!byDay.has(e.date)) byDay.set(e.date, new Set());
+    byDay.get(e.date).add(e.foodId);
+  }
+  const twin = [...byDay.entries()].find(([, set]) => { const r = jaccard(ids, set); return r.j >= 0.6 && r.inter >= 2; });
+  if (twin && !covered && !off) {
+    return `<div class="hint">${icon('sparkle')}<div class="grow"><b>זו כבר ארוחה קבועה?</b><br>
+      <span class="small">אכלת כמעט אותו דבר גם ${C.diffDays(twin[0], date) === 1 ? 'אתמול' : 'ב' + fmtDateLong(twin[0])}. אם תשמרי, בפעם הבאה היא תחכה במסך ההוספה.</span>
+      <div class="row" style="margin-top:8px"><button class="btn small" data-act="savemeal" data-s="${slot}">לשמור</button>
+      <button class="btn small ghost" data-act="hintoff" data-s="${slot}">לא עכשיו</button></div></div></div>`;
+  }
+  return covered ? '' : `<button class="linkbtn small" data-act="savemeal" data-s="${slot}">${icon('book', 'sm')}לשמור כארוחה קבועה</button>`;
+}
+
+function openSaveMealSheet(entries, slot) {
+  const body = openModal(`<h3>לשמור כארוחה קבועה</h3>
+    <p class="note">בפעם הבאה היא תחכה במסך ההוספה. לוחצים עליה, מורידים סימון ממה שלא אכלת הפעם, וזהו.</p>
+    <label class="field"><span>שם הארוחה</span><input id="mname" value="${esc(C.SLOT_HE[slot] + ' רגיל')}"></label>
     <button class="btn block" data-act="save">${icon('check')}לשמור</button>`);
   body.onclick = async (ev) => {
     if (!ev.target.closest('[data-act="save"]')) return;
     const name = $('#mname').value.trim();
     if (!name) { toast('צריך שם'); return; }
-    const meal = { id: uid('m'), name, items: entries.map((e) => ({ foodId: e.foodId, name: e.name, grams: e.grams, portion: e.portion })), useCount: 0, lastUsed: 0 };
+    const slotCounts = { breakfast: 0, lunch: 0, dinner: 0, snack: 0 };
+    slotCounts[slot] = 1;
+    const meal = { id: uid('m'), name, slot, slotCounts,
+      items: entries.map((e) => ({ foodId: e.foodId, name: e.name, grams: e.grams, portion: e.portion })), useCount: 0, lastUsed: Date.now() };
     await DB.put('meals', meal);
     APP.meals.push(meal);
-    closeModal(); toast('נשמר במנות הקבועות');
+    closeModal(); toast('נשמר בארוחות הקבועות'); rerender();
   };
 }
 
@@ -336,6 +343,9 @@ function openCloseDay(ctx, date, entries) {
 }
 
 /* ================= add ================= */
+/* The add screen is HER kitchen: her fixed meals and her foods as big tiles,
+   sorted by what she usually eats at this meal. The 4,624-item ministry DB
+   only appears when she asks for it (or when her own foods have no match). */
 async function viewAdd(parts, params) {
   const date = params.date && params.date <= today() ? params.date : today();
   let slot = params.slot || nowSlot();
@@ -343,52 +353,122 @@ async function viewAdd(parts, params) {
   setTitle(date === today() ? 'הוספה' : 'הוספה ל' + relDay(date));
   const dayEntries = await DB.byIndex('entries', 'date', date);
   const slotSum = () => C.sum(dayEntries.filter((e) => e.slot === slot)).k;
+  let showAllFoods = false;
+  let mohFor = null;           // query the ministry DB was opened for
 
   setView(`
     <div class="seg" id="aslot">${C.SLOTS.map((s) => `<button class="${s === slot ? 'on' : ''}" data-act="slot" data-s="${s}">${C.SLOT_HE[s]}</button>`).join('')}</div>
     <div class="faint center" id="asum" style="margin:6px 0 10px"></div>
-
-    <div class="searchbox">${icon('search')}<input type="search" id="q" placeholder="לחפש מאכל" autocomplete="off"></div>
-
-    <div id="extras">
-      <div class="card" style="margin-top:12px">
-        <div class="bold" style="margin-bottom:6px">או לכתוב או להגיד כמה מאכלים</div>
-        <textarea id="ft" rows="2" placeholder="2 ביצים, פרוסת חלה, 30 גרם בולגרית"></textarea>
-        <div class="row" style="margin-top:8px">
-          ${speechSupported() ? `<button class="btn ghost" data-act="mic" aria-label="להגיד בקול" style="padding:0 16px">${icon('mic')}להגיד</button>` : ''}
-          <button class="btn grow" data-act="ft">${icon('check')}להמשיך</button>
-        </div>
-      </div>
-      <div class="actions">${[
-        `<button class="action" data-act="barcode">${icon('barcode')}לסרוק ברקוד</button>`,
-        aiOn ? `<button class="action" data-act="plate">${icon('camera')}לצלם צלחת</button>` : '',
-        aiOn ? `<button class="action" data-act="label">${icon('label')}לצלם תווית</button>` : '',
-        `<button class="action" data-act="quickk">${icon('bolt')}רק קלוריות</button>`,
-        APP.meals.length ? `<button class="action" data-act="meals">${icon('book')}מנה קבועה</button>` : '',
-        `<button class="action" data-act="manual">${icon('pen')}מאכל חדש</button>`,
-      ].filter(Boolean).map((h, i, arr) => (arr.length % 2 && i === arr.length - 1 ? h.replace('class="action"', 'class="action wide"') : h)).join('')}</div>
-      <label class="row small muted" style="min-height:44px;margin:0 4px">
-        <input type="checkbox" id="plan" ${APP.planMode ? 'checked' : ''} style="width:22px;height:22px">
-        לתכנן לפני שאוכלים (מוסיפים לסל ורואים כמה יישאר)</label>
-    </div>
-    <div id="res" style="margin-top:6px"></div>
+    <div class="searchbox">${icon('search')}<input type="search" id="q" placeholder="לחפש במאכלים שלי" autocomplete="off"></div>
+    <div id="home"></div>
+    <div id="res" hidden></div>
   `);
+
   const updSum = () => {
     const k = slotSum();
     $('#asum').textContent = k ? `ב${C.SLOT_HE[slot]} ${date === today() ? 'היום' : ''} כבר נרשמו ${fmt(k)} קלוריות` : `מוסיפים ל${C.SLOT_HE[slot]}`;
   };
-  updSum();
-  const draw = async () => {
-    const q = $('#q').value;
-    const ex = $('#extras'); if (ex) ex.hidden = !!q.trim();
-    APP.results = await searchFoods(q, { libLimit: 8, mohLimit: 25 });
-    if ($('#res')) $('#res').innerHTML = resultsHtml(APP.results, q);
+
+  const drawHome = () => {
+    const meals = mealsForSlot(slot);
+    const foods = foodsForSlot(slot);
+    const LIMIT = 12;
+    const shown = showAllFoods ? foods : foods.slice(0, LIMIT);
+    let html = '';
+    if (meals.length) {
+      html += `<h2 class="section">${icon('book')}הארוחות שלי</h2>
+        ${meals.map((m) => `<div class="mealtile" data-act="meal" data-id="${m.id}">
+          <div class="grow"><div class="t">${esc(m.name)}</div>
+          <div class="s">${m.items.map((x) => esc(compactName((APP.libById.get(x.foodId) || x).name))).join(' · ')}</div></div>
+          <div class="k"><b class="dnum big">${fmt(mealKcal(m))}</b><span class="faint">קלוריות</span></div></div>`).join('')}`;
+    }
+    if (foods.length) {
+      html += `<h2 class="section">${icon('leaf')}המאכלים שלי</h2>
+        <div class="tiles">${shown.map((f) => {
+          const g = portionGrams(f);
+          const sub = f.lastPortion ? `${f.lastPortion.count && f.lastPortion.count !== 1 ? fmt1(f.lastPortion.count) + ' × ' : ''}${esc(f.lastPortion.name)}` : `${fmt(g)} ${f.liquid ? 'מ״ל' : 'גרם'}`;
+          return `<button class="tile" data-act="food" data-id="${f.id}">
+            <span class="t">${dot(f.per100.k, f.liquid)}<span class="tt">${esc(compactName(f.name))}</span></span>
+            <span class="s">${sub} · <span class="n">${fmt(C.nutrition(f.per100, g).k)}</span></span></button>`;
+        }).join('')}</div>
+        ${foods.length > LIMIT ? `<div class="center"><button class="linkbtn" data-act="morefoods">${showAllFoods ? 'פחות' : `עוד ${foods.length - LIMIT} מאכלים שלי`}</button></div>` : ''}`;
+    } else {
+      html += `<div class="card soft" style="margin-top:12px"><h3>עוד אין מאכלים שלך</h3>
+        <p class="note">מחפשים מאכל פעם אחת, והוא נשמר כאן. אחרי כמה ימים כמעט כל מה שאת אוכלת יחכה כאן ללחיצה.</p>
+        <button class="btn block" data-act="openmoh" style="margin-top:8px">${icon('search')}לחפש מאכל</button></div>`;
+    }
+    html += `<h2 class="section">${icon('plus')}עוד דרכים להוסיף</h2>
+      <div class="chips wrap">
+        <button class="chip" data-act="freetext">${icon('mic')}לכתוב או להגיד</button>
+        <button class="chip" data-act="barcode">${icon('barcode')}לסרוק ברקוד</button>
+        ${aiOn ? `<button class="chip" data-act="plate">${icon('camera')}לצלם צלחת</button>` : ''}
+        ${aiOn ? `<button class="chip" data-act="label">${icon('label')}לצלם תווית</button>` : ''}
+        <button class="chip" data-act="openmoh">${icon('search')}מאכל שלא ברשימה</button>
+        <button class="chip" data-act="quickk">${icon('bolt')}רק קלוריות</button>
+        <button class="chip" data-act="manual">${icon('pen')}מאכל חדש</button>
+      </div>
+      <label class="row small muted" style="min-height:44px;margin:4px">
+        <input type="checkbox" id="plan" ${APP.planMode ? 'checked' : ''} style="width:22px;height:22px">
+        לתכנן לפני שאוכלים (מוסיפים לסל ורואים כמה יישאר)</label>`;
+    $('#home').innerHTML = html;
   };
-  draw();
-  const afterLog = (es) => { dayEntries.push(...es); updSum(); };
+
+  const drawResults = async () => {
+    const q = $('#q').value.trim();
+    $('#home').hidden = !!q || mohFor === '';
+    $('#res').hidden = !q && mohFor !== '';
+    if (!q && mohFor !== '') { APP.results = []; return; }
+    const lib = libViews();
+    const mine = q ? S.search(lib, q, { limit: 12, nameOf: (x) => x.name, englishOf: () => '' }) : [];
+    const mealHits = q ? APP.meals.filter((m) => S.norm(m.name).includes(S.norm(q))) : [];
+    const wantMoh = mohFor !== null && (mohFor === '' || mohFor === q) || (q && !mine.length && !mealHits.length);
+    let moh = [];
+    if (wantMoh && q) {
+      try {
+        const all = await loadMoh();
+        const have = new Set(mine.map((v) => v.mohCode).filter(Boolean));
+        moh = S.search(all, q, { limit: 25 + have.size }).filter((m) => !have.has(m.i)).slice(0, 25).map(S.viewMoh);
+      } catch (_) { moh = null; }
+    }
+    APP.results = [...mine, ...(moh || [])];
+    let html = '';
+    if (mealHits.length) {
+      html += mealHits.map((m) => `<div class="mealtile" data-act="meal" data-id="${m.id}"><div class="grow"><div class="t">${esc(m.name)}</div>
+        <div class="s">${m.items.length} מאכלים</div></div><div class="k"><b class="dnum big">${fmt(mealKcal(m))}</b></div></div>`).join('');
+    }
+    if (mine.length) html += `<div class="faint bold" style="margin:10px 4px 6px">המאכלים שלי</div>` + mine.map((v, i) => resultRow(v, i)).join('');
+    if (q && !wantMoh) {
+      html += `<button class="btn block ghost" data-act="mohq" style="margin-top:10px">${icon('search')}לחפש "${esc(q)}" במאגר הכללי</button>`;
+    } else if (q) {
+      html += `<div class="faint bold" style="margin:14px 4px 6px">מהמאגר של משרד הבריאות</div>`;
+      if (moh === null) html += '<div class="note center">המאגר לא נטען. בדקי חיבור לאינטרנט.</div>';
+      else if (!moh.length) html += `<div class="empty small">לא נמצא "${esc(q)}". אפשר להוסיף כמאכל חדש.</div>`;
+      else html += moh.map((v, j) => resultRow(v, mine.length + j)).join('');
+    } else {
+      html += `<div class="empty small">${icon('search', 'lg')}<br>כתבי שם של מאכל לחיפוש במאגר הכללי</div>
+        <div class="center"><button class="linkbtn" data-act="backhome">חזרה למאכלים שלי</button></div>`;
+    }
+    $('#res').innerHTML = html;
+  };
+  const resultRow = (v, i) => {
+    const g = v.src === 'lib' ? portionGrams(v.ref) : 100;
+    const sub = v.src === 'lib'
+      ? `${v.lastPortion ? esc(v.lastPortion.name) : fmt(g) + ' גרם'} · ${fmt(C.nutrition(v.per100, g).k)} קלוריות`
+      : `ל-100 ${v.liquid ? 'מ״ל' : 'גרם'}: ${fmt(v.per100.k)} קלוריות`;
+    return `<div class="item ${v.src === 'lib' ? '' : 'flat'}" data-act="res" data-i="${i}">${dot(v.per100.k, v.liquid)}
+      <div class="nm"><div class="t">${esc(v.name)}</div><div class="s">${sub}</div></div></div>`;
+  };
+
+  updSum();
+  drawHome();
+  const afterLog = (es) => { dayEntries.push(...es); updSum(); drawHome(); };
 
   let t = null;
-  VIEW.oninput = (ev) => { if (ev.target.id === 'q') { clearTimeout(t); t = setTimeout(draw, 140); } };
+  VIEW.oninput = (ev) => {
+    if (ev.target.id !== 'q') return;
+    if (mohFor !== '' && mohFor !== ev.target.value.trim()) mohFor = null;
+    clearTimeout(t); t = setTimeout(drawResults, 140);
+  };
   VIEW.onchange = (ev) => { if (ev.target.id === 'plan') { APP.planMode = ev.target.checked; saveBasket(); } };
   VIEW.onclick = async (ev) => {
     const b = ev.target.closest('[data-act]');
@@ -398,28 +478,36 @@ async function viewAdd(parts, params) {
     if (act === 'slot') {
       slot = b.dataset.s;
       document.querySelectorAll('#aslot button').forEach((x) => x.classList.toggle('on', x.dataset.s === slot));
-      updSum();
+      updSum(); drawHome();
+    } else if (act === 'food') {
+      openFoodSheet(S.viewLib(APP.libById.get(b.dataset.id)), sheetOpts);
+    } else if (act === 'meal') {
+      logMealFlow(APP.meals.find((m) => m.id === b.dataset.id), { slot, date, onSaved: afterLog });
+    } else if (act === 'morefoods') {
+      showAllFoods = !showAllFoods; drawHome();
     } else if (act === 'res') {
       openFoodSheet(APP.results[+b.dataset.i], sheetOpts);
-    } else if (act === 'mic') {
-      dictate((txt) => { $('#ft').value = ($('#ft').value ? $('#ft').value + ', ' : '') + txt; freeText(); }, b);
-    } else if (act === 'ft') {
-      freeText();
+    } else if (act === 'backhome') {
+      mohFor = null; $('#q').value = ''; $('#q').placeholder = 'לחפש במאכלים שלי'; drawResults();
+    } else if (act === 'mohq') {
+      mohFor = $('#q').value.trim(); drawResults();
+    } else if (act === 'openmoh') {
+      mohFor = ''; $('#q').placeholder = 'לחפש במאגר הכללי'; $('#q').focus(); drawResults();
+    } else if (act === 'freetext') {
+      openFreeText({ slot, date, aiOn, onSaved: afterLog });
     } else if (act === 'barcode') {
       openBarcode(sheetOpts);
     } else if (act === 'manual') {
       openManualFood({ onSaved: (f) => openFoodSheet(S.viewLib(f), sheetOpts) });
     } else if (act === 'quickk') {
       openQuickKcal({ slot, date });
-    } else if (act === 'meals') {
-      openMealsPicker({ slot, date });
     } else if (act === 'plate') {
       const file = await pickImage(); if (!file) return;
       openModal(`<h3>מסתכלת על הצלחת…</h3><div class="sk" style="height:90px"></div>`);
       try {
         const items = await AI.plate(file, libFoods());
         if (!items.length) { closeModal(); toast('לא הצלחתי לזהות. אפשר לכתוב במילים'); return; }
-        openConfirmList(items, { title: 'זה מה שראיתי', note: 'הערכה בלבד. כדאי לתקן כמויות אם צריך.', slot, date, onSaved: () => goHome() });
+        openConfirmList(items, { title: 'זה מה שראיתי', note: 'הערכה בלבד. כדאי לתקן כמויות אם צריך.', slot, date, onSaved: afterLog });
       } catch (e) { closeModal(); toast(aiErrorText(e)); }
     } else if (act === 'label') {
       const file = await pickImage(); if (!file) return;
@@ -430,10 +518,34 @@ async function viewAdd(parts, params) {
       } catch (e) { closeModal(); toast(aiErrorText(e)); }
     }
   };
+}
 
-  async function freeText() {
-    const text = $('#ft').value.trim();
-    if (!text) { toast('כתבי מה אכלת'); $('#ft').focus(); return; }
+/* Her foods, most relevant to this meal first: how often she had it at this
+   meal, then overall use, then favourites and recency. */
+function foodsForSlot(slot) {
+  return libFoods().filter((f) => f.source !== 'recipe' || APP.recipes.some((r) => r.id === f.recipeId))
+    .sort((a, b) => ((b.slotCounts?.[slot] || 0) - (a.slotCounts?.[slot] || 0))
+      || ((b.useCount || 0) - (a.useCount || 0))
+      || ((b.fav ? 1 : 0) - (a.fav ? 1 : 0))
+      || ((b.lastUsed || 0) - (a.lastUsed || 0)));
+}
+function mealsForSlot(slot) {
+  return [...APP.meals].sort((a, b) => ((b.slotCounts?.[slot] || 0) - (a.slotCounts?.[slot] || 0))
+    || ((b.slot === slot ? 1 : 0) - (a.slot === slot ? 1 : 0))
+    || ((b.lastUsed || 0) - (a.lastUsed || 0)));
+}
+
+function openFreeText({ slot, date, aiOn, onSaved }) {
+  const body = openModal(`<h3>לכתוב או להגיד</h3>
+    <textarea id="ft" rows="3" placeholder="2 ביצים, פרוסת חלה, 30 גרם בולגרית"></textarea>
+    <div class="row" style="margin-top:10px">
+      ${speechSupported() ? `<button class="btn ghost" data-act="mic" style="padding:0 16px">${icon('mic')}להגיד</button>` : ''}
+      <button class="btn grow" data-act="go">${icon('check')}להמשיך</button>
+    </div>`);
+  setTimeout(() => { const f = $('#ft'); if (f) f.focus(); }, 250);
+  const go = async () => {
+    const text = ($('#ft').value || '').trim();
+    if (!text) { toast('כתבי מה אכלת'); return; }
     openModal(`<h3>רגע, מסדרת…</h3><div class="sk" style="height:90px"></div>`);
     let items = null, note = '';
     if (aiOn && online()) {
@@ -443,34 +555,38 @@ async function viewAdd(parts, params) {
       const moh = await loadMoh().catch(() => []);
       items = Parse.parse(text, { lib: libViews(), moh });
     }
-    if (!items.length) { closeModal(); toast('לא הבנתי. אפשר לנסות לחפש מאכל'); return; }
-    openConfirmList(items, { title: 'זה מה שהבנתי', note, slot, date, onSaved: (es) => { $('#ft').value = ''; afterLog(es); } });
-  }
+    if (!items.length) { closeModal(); toast('לא הבנתי. אפשר לחפש מאכל'); return; }
+    openConfirmList(items, { title: 'זה מה שהבנתי', note, slot, date, onSaved });
+  };
+  body.onclick = (ev) => {
+    const b = ev.target.closest('[data-act]'); if (!b) return;
+    if (b.dataset.act === 'go') go();
+    else if (b.dataset.act === 'mic') dictate((txt) => { $('#ft').value = ($('#ft').value ? $('#ft').value + ', ' : '') + txt; go(); }, b);
+  };
 }
 function aiErrorText(e) {
   if (e && (e.status === 429 || e.status === 503)) return 'העזרה החכמה עמוסה, אפשר לנסות שוב בעוד דקה';
   if (!online()) return 'אין אינטרנט כרגע';
   return 'לא הצלחתי. אפשר לנסות שוב או לכתוב במילים';
 }
-function openMealsPicker({ slot, date }) {
-  const meals = [...APP.meals].sort((a, b) => (b.lastUsed || 0) - (a.lastUsed || 0));
-  const body = openModal(`<h3>מנה קבועה</h3>
-    ${meals.map((m, i) => `<div class="item" data-i="${i}">${icon('book')}<div class="nm"><div class="t">${esc(m.name)}</div>
-      <div class="s">${m.items.length} מאכלים · <span class="n">${fmt(mealKcal(m))}</span> קלוריות</div></div></div>`).join('')}`);
-  body.onclick = (ev) => {
-    const it = ev.target.closest('[data-i]'); if (!it) return;
-    logMealFlow(meals[+it.dataset.i], { slot, date });
-  };
-}
 function mealItems(m) {
   return m.items.map((x) => ({ food: APP.libById.get(x.foodId), grams: x.grams, portion: x.portion }))
     .filter((x) => x.food).map((x) => ({ ...x, food: S.viewLib(x.food) }));
 }
 function mealKcal(m) { return mealItems(m).reduce((a, x) => a + C.nutrition(x.food.per100, x.grams).k, 0); }
-function logMealFlow(m, { slot, date } = {}) {
+/* A fixed meal opens as a ticked checklist: untick what she skipped today,
+   change an amount, or add something extra. The saved meal stays as it is. */
+function logMealFlow(m, { slot, date, onSaved } = {}) {
+  const s = slot || nowSlot();
   openConfirmList(mealItems(m), {
-    title: m.name, slot, date, mealId: m.id, mealName: m.name,
-    onSaved: async () => { m.useCount = (m.useCount || 0) + 1; m.lastUsed = Date.now(); await DB.put('meals', m); goHome(); },
+    title: m.name, slot: s, date, mealId: m.id, mealName: m.name, checklist: true, saveLabel: 'אכלתי',
+    onSaved: async (entries) => {
+      m.useCount = (m.useCount || 0) + 1; m.lastUsed = Date.now();
+      m.slotCounts = m.slotCounts || { breakfast: 0, lunch: 0, dinner: 0, snack: 0 };
+      m.slotCounts[entries[0] ? entries[0].slot : s] = (m.slotCounts[entries[0] ? entries[0].slot : s] || 0) + 1;
+      await DB.put('meals', m);
+      if (onSaved) onSaved(entries); else goHome();
+    },
   });
 }
 
@@ -480,7 +596,7 @@ async function viewRecipes(parts, params) {
   setTitle('מתכונים ומנות');
   let html = `<div class="seg" style="margin-bottom:12px">
     <button class="${tab === 'recipes' ? 'on' : ''}" data-act="tab" data-t="recipes">מתכונים</button>
-    <button class="${tab === 'meals' ? 'on' : ''}" data-act="tab" data-t="meals">מנות קבועות</button></div>`;
+    <button class="${tab === 'meals' ? 'on' : ''}" data-act="tab" data-t="meals">ארוחות קבועות</button></div>`;
   if (tab === 'recipes') {
     html += `<p class="note" style="margin:0 4px 10px">מתכון הוא מאכל שבישלת בעצמך, כמו הדג שלך. כותבים אותו פעם אחת, ואחר כך רק רושמים כמה גרם אכלת.</p>
       <a class="btn block soft" href="#/recipe/new" style="margin-bottom:12px">${icon('plus')}מתכון חדש</a>`;
@@ -492,13 +608,13 @@ async function viewRecipes(parts, params) {
         ${f ? `<button class="btn small soft" data-act="log" data-id="${f.id}">לרשום</button>` : ''}</div>`;
     }).join('') : `<div class="empty">${icon('book', 'lg')}<br>עוד אין מתכונים</div>`;
   } else {
-    html += `<p class="note" style="margin:0 4px 10px">מנה קבועה היא כמה מאכלים שאוכלים יחד, כמו ארוחת הבוקר הרגילה. נרשמת בלחיצה אחת. אפשר גם לשמור מנה ישר ממסך היום.</p>
-      <a class="btn block soft" href="#/meal/new" style="margin-bottom:12px">${icon('plus')}מנה חדשה</a>`;
+    html += `<p class="note" style="margin:0 4px 10px">ארוחה קבועה היא כמה מאכלים שאוכלים יחד, כמו ארוחת הבוקר הרגילה. נרשמת בלחיצה אחת. אפשר גם לשמור מנה ישר ממסך היום.</p>
+      <a class="btn block soft" href="#/meal/new" style="margin-bottom:12px">${icon('plus')}ארוחה חדשה</a>`;
     const ms = [...APP.meals].sort((a, b) => (b.lastUsed || 0) - (a.lastUsed || 0));
     html += ms.length ? ms.map((m) => `<div class="item" data-act="openmeal" data-id="${m.id}">${icon('book')}
         <div class="nm"><div class="t">${esc(m.name)}</div><div class="s">${m.items.length} מאכלים · <span class="n">${fmt(mealKcal(m))}</span> קלוריות</div></div>
         <button class="btn small soft" data-act="logmeal" data-id="${m.id}">לרשום</button></div>`).join('')
-      : `<div class="empty">${icon('book', 'lg')}<br>עוד אין מנות קבועות</div>`;
+      : `<div class="empty">${icon('book', 'lg')}<br>עוד אין ארוחות קבועות</div>`;
   }
   setView(html);
   VIEW.onclick = (ev) => {
@@ -637,7 +753,7 @@ async function viewMeal(parts) {
     }
   }
   const d = APP.draft;
-  setTitle(id === 'new' ? 'מנה קבועה חדשה' : 'עריכת מנה');
+  setTitle(id === 'new' ? 'ארוחה קבועה חדשה' : 'עריכת ארוחה');
   const rows = d.items.map((x, i) => {
     const f = APP.libById.get(x.foodId);
     if (!f) return '';
@@ -649,13 +765,13 @@ async function viewMeal(parts) {
   }).join('');
   const total = () => d.items.reduce((a, x) => { const f = APP.libById.get(x.foodId); return a + (f ? C.nutrition(f.per100, x.grams).k : 0); }, 0);
   setView(`
-    <label class="field"><span>שם המנה</span><input id="mname" value="${esc(d.name)}" placeholder="למשל: ארוחת בוקר רגילה"></label>
+    <label class="field"><span>שם הארוחה</span><input id="mname" value="${esc(d.name)}" placeholder="למשל: ארוחת בוקר רגילה"></label>
     <div class="card"><h3>מה יש בה</h3>${rows || '<div class="faint">עוד ריקה</div>'}
       <button class="btn block soft" data-act="add" style="margin-top:10px">${icon('plus')}להוסיף מאכל</button>
       <div class="spread" style="margin-top:12px"><span class="bold">סה״כ</span><b><span class="dnum big" id="mtot">${fmt(total())}</span> קלוריות</b></div></div>
     <button class="btn block" data-act="save">${icon('check')}לשמור</button>
     ${id !== 'new' ? `<button class="btn block ghost" data-act="lognow" style="margin-top:10px">${icon('plus')}לרשום עכשיו</button>
-      <div class="center"><button class="linkbtn" data-act="remove" style="color:var(--bad)">${icon('trash', 'sm')}להסיר את המנה</button></div>` : ''}
+      <div class="center"><button class="linkbtn" data-act="remove" style="color:var(--bad)">${icon('trash', 'sm')}להסיר את הארוחה</button></div>` : ''}
   `);
   VIEW.oninput = (ev) => {
     if (ev.target.id === 'mname') d.name = ev.target.value;
@@ -680,7 +796,7 @@ async function viewMeal(parts) {
     const act = b.dataset.act;
     if (act === 'rm') { d.items.splice(+b.dataset.i, 1); rerender(); }
     else if (act === 'add') {
-      openPicker({ onPick: (view) => openFoodSheet(view, { mode: 'pick', pickLabel: 'להוסיף למנה',
+      openPicker({ onPick: (view) => openFoodSheet(view, { mode: 'pick', pickLabel: 'להוסיף לארוחה',
         onDone: async ({ view: v, grams, portion }) => { const f = await ensureLibFood(v); d.items.push({ foodId: f.id, name: f.name, grams: Math.round(grams), portion }); rerender(); } }) });
     } else if (act === 'save') {
       const m = await persist(); if (!m) return;
@@ -691,7 +807,7 @@ async function viewMeal(parts) {
     } else if (act === 'remove') {
       await DB.del('meals', id);
       APP.meals = APP.meals.filter((m) => m.id !== id);
-      APP.draft = null; toast('המנה הוסרה'); location.hash = '#/recipes?tab=meals';
+      APP.draft = null; toast('הארוחה הוסרה'); location.hash = '#/recipes?tab=meals';
     }
   };
 }
@@ -898,7 +1014,7 @@ async function viewMore() {
   setView(`<div class="card" style="padding:4px 14px">
     <a class="linkrow" href="#/history">${icon('calendar')}היסטוריה${icon('chev', 'chev')}</a>
     <a class="linkrow" href="#/insights">${icon('bulb')}תובנות${icon('chev', 'chev')}</a>
-    <a class="linkrow" href="#/recipes?tab=meals">${icon('book')}מנות קבועות${icon('chev', 'chev')}</a>
+    <a class="linkrow" href="#/recipes?tab=meals">${icon('book')}ארוחות קבועות${icon('chev', 'chev')}</a>
     <a class="linkrow" href="#/settings">${icon('gear')}הגדרות ויעד${icon('chev', 'chev')}</a>
     <a class="linkrow" href="#/backup" style="border:none">${icon('cloud')}גיבוי ושחזור${icon('chev', 'chev')}</a></div>
     <p class="faint center">צלחת · גרסה <span class="n">${esc(CFG.VERSION)}</span></p>`);

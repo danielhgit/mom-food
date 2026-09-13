@@ -391,15 +391,20 @@ function macrosHtml(n) {
 /* ================= confirm list ================= */
 /* items: [{food: view|null, grams, portion, raw, estimated}] — used by free
    text, speech, smart help, evening suggestions, ready meals and basket. */
+/* opts.checklist: a fixed meal. Every item starts ticked; untick what she
+   didn't eat this time (the meal itself is not changed). */
 function openConfirmList(items, opts = {}) {
   const mode = opts.mode || 'log';          // 'log' | 'pick'
-  const st = { slot: opts.slot || nowSlot(), items: items.map((x) => ({ ...x })) };
+  const checklist = !!opts.checklist;
+  const st = { slot: opts.slot || nowSlot(), items: items.map((x) => ({ on: true, ...x })) };
+  const live = () => st.items.filter((x) => x.on && x.food && x.grams > 0);
   const render = () => {
-    const resolved = st.items.filter((x) => x.food && x.grams > 0);
+    const resolved = live();
     const total = resolved.reduce((a, x) => a + C.nutrition(x.food.per100, x.grams).k, 0);
     const body = openModal(`
       <h3>${esc(opts.title || 'לבדוק ולהוסיף')}</h3>
       ${opts.note ? `<div class="note" style="margin:-6px 0 8px">${opts.note}</div>` : ''}
+      ${checklist ? '<div class="note" style="margin:-6px 0 8px">מה שלא אכלת הפעם, מורידים את הסימון. הארוחה הקבועה לא משתנה.</div>' : ''}
       <div id="clrows">${st.items.map((x, i) => rowHtml(x, i)).join('')}</div>
       <div class="spread" style="margin:12px 2px">
         <button class="linkbtn" data-act="addrow">${icon('plus', 'sm')}עוד מאכל</button>
@@ -419,14 +424,17 @@ function openConfirmList(items, opts = {}) {
     }
     const n = C.nutrition(x.food.per100, x.grams || 0);
     const sub = x.portion ? `${x.portion.count === 1 ? '' : fmt1(x.portion.count) + ' × '}${esc(x.portion.name)}` : (x.estimated ? 'כמות משוערת' : (x.note || ''));
-    return `<div class="confirmrow">${dot(x.food.per100.k, x.food.liquid)}
-      <div class="nm" data-act="pick" data-i="${i}"><div class="t">${esc(x.food.name)}</div><div class="s">${sub}${x.estimated && x.portion ? ' · משוער' : ''}</div></div>
-      <input class="num" inputmode="numeric" data-i="${i}" value="${Math.round(x.grams || 0)}" aria-label="גרמים">
+    const tick = checklist
+      ? `<button class="tick ${x.on ? 'on' : ''}" data-act="toggle" data-i="${i}" aria-label="${x.on ? 'לא אכלתי הפעם' : 'אכלתי'}" aria-pressed="${x.on}">${icon('check')}</button>`
+      : dot(x.food.per100.k, x.food.liquid);
+    return `<div class="confirmrow ${x.on ? '' : 'off'}">${tick}
+      <div class="nm" data-act="${checklist ? 'toggle' : 'pick'}" data-i="${i}"><div class="t">${esc(x.food.name)}</div><div class="s">${x.on ? sub + (x.estimated && x.portion ? ' · משוער' : '') : 'לא הפעם'}</div></div>
+      <input class="num" inputmode="numeric" data-i="${i}" value="${Math.round(x.grams || 0)}" aria-label="גרמים" ${x.on ? '' : 'disabled'}>
       <span class="k n" id="clk${i}">${fmt(n.k)}</span>
-      <button class="iconbtn" data-act="del" data-i="${i}" aria-label="הסרה">${icon('x')}</button></div>`;
+      ${checklist ? '' : `<button class="iconbtn" data-act="del" data-i="${i}" aria-label="הסרה">${icon('x')}</button>`}</div>`;
   };
   const updateTotal = () => {
-    const total = st.items.filter((x) => x.food).reduce((a, x) => a + C.nutrition(x.food.per100, x.grams || 0).k, 0);
+    const total = st.items.filter((x) => x.on && x.food).reduce((a, x) => a + C.nutrition(x.food.per100, x.grams || 0).k, 0);
     $('#cltotal').textContent = fmt(total);
   };
   const onInput = (ev) => {
@@ -446,6 +454,7 @@ function openConfirmList(items, opts = {}) {
     const act = b.dataset.act;
     if (act === 'slot') { st.slot = b.dataset.s; render(); }
     else if (act === 'del') { st.items.splice(+b.dataset.i, 1); render(); }
+    else if (act === 'toggle') { const x = st.items[+b.dataset.i]; x.on = !x.on; vibrate(8); render(); }
     else if (act === 'pick' || act === 'addrow') {
       const idx = act === 'pick' ? +b.dataset.i : -1;
       const query = idx >= 0 ? (st.items[idx].query || (st.items[idx].food ? st.items[idx].food.name.split(',')[0] : st.items[idx].raw) || '') : '';
@@ -455,7 +464,7 @@ function openConfirmList(items, opts = {}) {
           mode: 'pick', pickLabel: 'לבחור',
           grams: idx >= 0 && st.items[idx].food ? st.items[idx].grams : null,
           onDone: ({ view: v, grams, portion }) => {
-            const item = { food: v, grams, portion, raw: v.name };
+            const item = { food: v, grams, portion, raw: v.name, on: true };
             if (idx >= 0) st.items[idx] = item; else st.items.push(item);
             render();
           },
@@ -463,7 +472,7 @@ function openConfirmList(items, opts = {}) {
         onCancel: render,
       });
     } else if (act === 'save') {
-      const list = st.items.filter((x) => x.food && x.grams > 0);
+      const list = live();
       if (!list.length) return;
       if (mode === 'pick') { closeModal(); opts.onDone && opts.onDone(list); return; }
       const foods = [];
@@ -570,7 +579,7 @@ function openManualFood({ food, prefill = {}, note, onSaved }) {
     <div class="divider"></div>
     <div class="faint bold" style="margin:0 2px 8px">מנה רגילה (לא חובה)</div>
     <div class="grid2">
-      <label class="field"><span>שם המנה</span><input id="mfpn" value="${esc(v.portion ? v.portion.name : '')}" placeholder="יחידה / פרוסה"></label>
+      <label class="field"><span>שם הארוחה</span><input id="mfpn" value="${esc(v.portion ? v.portion.name : '')}" placeholder="יחידה / פרוסה"></label>
       <label class="field"><span>משקל המנה</span><input class="num" id="mfpg" inputmode="decimal" value="${esc(v.portion ? v.portion.grams : '')}"></label>
     </div>
     <button class="btn block" data-act="save">${icon('check')}שמירה</button>

@@ -6,10 +6,10 @@
   --bg:#faf6f0; --bg2:#f3ede4; --card:#ffffff; --card2:#f6f1ea; --inset:#efe8de;
   --line:#e2d9cc; --hair:rgba(90,70,50,.10);
   --text:#2b2520; --muted:#6a5f56; --faint:#8a7f75;
-  --accent:#b4501f; --accent2:#e07b45; --accent-soft:#fbe9dd;
-  --good:#357a4c; --good-soft:#e3f2e8; --warn:#9a6508; --warn-soft:#fbf1da;
+  --accent:#1f5a48; --accent2:#2f8068; --accent-soft:#e2efe9; --over:#e08a4a;
+  --good:#2e7d5b; --good-soft:#e3f2e8; --warn:#9a6508; --warn-soft:#fbf1da;
   --bad:#b03a2e; --bad-soft:#f9e3e0;
-  --kcal:#b4501f; --prot:#2f6f8f; --fat:#b08a1e; --carb:#6f8f34;
+  --kcal:#1f5a48; --prot:#2f6f8f; --fat:#b08a1e; --carb:#6f8f34;
   --dens-g:#3f8f5a; --dens-y:#d9a21b; --dens-o:#e07b45;
   --gold:#b98a14; --gold-soft:#fbf3dc;
   --r-card:18px; --r-in:14px; --r-hero:22px;
@@ -55,7 +55,7 @@ p{margin:.4em 0}
   background:rgba(250,246,240,.94); backdrop-filter:blur(10px);
   border-bottom:1px solid var(--hair)}
 #brand{display:flex; align-items:center; gap:8px; flex:1; min-width:0; padding:0 6px}
-#brand .logo{color:var(--good)}
+#brand .logo{color:var(--accent)}
 #topbar h1{font-size:1.2rem; margin:0; font-weight:900; white-space:nowrap;
   overflow:hidden; text-overflow:ellipsis}
 .iconbtn{background:none; border:none; color:var(--muted); min-width:var(--tap);
@@ -219,7 +219,7 @@ input::placeholder,textarea::placeholder{color:#b9aea3; font-weight:400}
   border-radius:2px; background:var(--accent)}
 #nav a.center .orb{width:58px; height:58px; border-radius:50%; background:var(--accent);
   display:flex; align-items:center; justify-content:center; margin-top:-24px;
-  margin-bottom:2px; box-shadow:0 6px 18px rgba(180,80,31,.35), 0 0 0 5px var(--card)}
+  margin-bottom:2px; box-shadow:0 6px 18px rgba(31,90,72,.35), 0 0 0 5px var(--card)}
 #nav a.center .orb .ic{width:1.8rem; height:1.8rem; color:#fff}
 #nav a.center.active::before{display:none}
 
@@ -238,7 +238,7 @@ input::placeholder,textarea::placeholder{color:#b9aea3; font-weight:400}
   border-radius:14px; z-index:99; opacity:0; transition:opacity .2s; pointer-events:none;
   max-width:92vw; display:flex; align-items:center; gap:14px; box-shadow:var(--sh2)}
 #toast.show{opacity:1; pointer-events:auto}
-#toastbtn{background:none; border:none; color:#ffc7a6; font-weight:900; min-height:40px;
+#toastbtn{background:none; border:none; color:#9fe0c6; font-weight:900; min-height:40px;
   padding:0 4px; cursor:pointer}
 #modal{position:fixed; inset:0; background:rgba(43,37,32,.45); z-index:97; display:none;
   align-items:flex-end; justify-content:center}
@@ -296,7 +296,7 @@ input::placeholder,textarea::placeholder{color:#b9aea3; font-weight:400}
 .scanbox video{width:100%; height:100%; object-fit:cover; display:block}
 .scanframe{position:absolute; left:9%; right:9%; top:28%; bottom:28%; border:3px solid rgba(255,255,255,.95);
   border-radius:14px; box-shadow:0 0 0 999px rgba(0,0,0,.38); pointer-events:none}
-.scanframe::after{content:''; position:absolute; left:6%; right:6%; top:50%; height:2px; background:rgba(224,123,69,.9);
+.scanframe::after{content:''; position:absolute; left:6%; right:6%; top:50%; height:2px; background:rgba(125,214,178,.95);
   animation:scanline 1.6s ease-in-out infinite alternate}
 @keyframes scanline{from{transform:translateY(-38px)} to{transform:translateY(38px)}}
 .scantorch{position:absolute; top:10px; left:10px; width:48px; height:48px; border-radius:50%; border:none;
@@ -310,3 +310,31 @@ input::placeholder,textarea::placeholder{color:#b9aea3; font-weight:400}
 #view>.vwrap{animation:enter .16s ease-out}
 @keyframes enter{from{opacity:0; transform:translateY(6px)} to{opacity:1; transform:none}}
 @media (prefers-reduced-motion: reduce){ #view>.vwrap,#modal .panel,.sk{animation:none} }
+
+/* ---------- add screen: her kitchen ---------- */
+.tiles{display:grid; grid-template-columns:1fr 1fr; gap:10px}
+.tile{display:flex; flex-direction:column; align-items:flex-start; justify-content:center; gap:2px; min-height:72px;
+  padding:10px 12px; background:var(--card); border:1.5px solid var(--line); border-radius:16px; cursor:pointer;
+  text-align:right; box-shadow:var(--sh1); min-width:0}
+.tile:active{border-color:var(--accent2); background:var(--accent-soft)}
+.tile .t{display:flex; align-items:center; gap:7px; font-weight:700; max-width:100%}
+.tile .tt{display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+  line-height:1.25; unicode-bidi:plaintext}
+.tile .t{align-items:flex-start}
+.tile .t .dot{margin-top:.35em}
+.tile .s{color:var(--faint); font-size:.82rem}
+.mealtile{display:flex; align-items:center; gap:12px; background:var(--accent-soft); border:1.5px solid rgba(31,90,72,.18);
+  border-radius:18px; padding:12px 14px; margin-bottom:10px; cursor:pointer; min-height:72px}
+.mealtile .t{font-weight:900; font-size:1.05rem}
+.mealtile .s{color:var(--muted); font-size:.85rem; line-height:1.35}
+.mealtile .k{display:flex; flex-direction:column; align-items:center; color:var(--accent)}
+
+/* ---------- fixed-meal checklist ---------- */
+.tick{width:40px; height:40px; flex:none; border-radius:12px; border:2px solid var(--line); background:var(--card);
+  color:transparent; display:flex; align-items:center; justify-content:center; cursor:pointer}
+.tick.on{background:var(--accent); border-color:var(--accent); color:#fff}
+.confirmrow.off .nm .t{color:var(--faint); text-decoration:line-through}
+.confirmrow.off input, .confirmrow.off .k{opacity:.35}
+.hint{display:flex; gap:10px; align-items:flex-start; background:var(--accent-soft); border-radius:14px;
+  padding:10px 12px; margin:8px 0 6px}
+.hint>.ic{color:var(--accent); margin-top:2px}
