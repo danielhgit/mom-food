@@ -405,7 +405,7 @@ async function viewAdd(parts, params) {
       html += `<h2 class="section">${icon('leaf')}המאכלים שלי</h2>
         <div class="tiles">${shown.map((f) => {
           const g = portionGrams(f);
-          const sub = f.lastPortion ? `${f.lastPortion.count && f.lastPortion.count !== 1 ? fmt1(f.lastPortion.count) + ' × ' : ''}${esc(f.lastPortion.name)}` : `${fmt(g)} ${f.liquid ? 'מ״ל' : 'גרם'}`;
+          const sub = f.lastPortion ? esc(countLabel(f.lastPortion.name, f.lastPortion.count || 1)) : `${fmt(g)} ${f.liquid ? 'מ״ל' : 'גרם'}`;
           return `<button class="tile" data-act="food" data-id="${f.id}">
             <span class="t">${dot(f.per100.k, f.liquid)}<span class="tt">${esc(compactName(f.name))}</span></span>
             <span class="s">${sub} · <span class="n">${fmt(C.nutrition(f.per100, g).k)}</span></span></button>`;
@@ -671,7 +671,7 @@ async function viewRecipe(parts) {
       ${!num(d.cookedWeight) ? '<div class="faint center" style="margin-top:6px">בלי משקל אחרי בישול, החישוב לפי משקל הרכיבים</div>' : ''}`;
   };
   const ingHtml = () => d.ingredients.map((x, i) => `<div class="confirmrow">${dot(x.per100.k, x.liquid)}
-      <div class="nm"><div class="t">${esc(x.name)}</div><div class="s">${x.portion ? `${x.portion.count === 1 ? '' : fmt1(x.portion.count) + ' × '}${esc(x.portion.name)}` : ''}</div></div>
+      <div class="nm"><div class="t">${esc(x.name)}</div><div class="s">${x.portion ? `${esc(countLabel(x.portion.name, x.portion.count))}` : ''}</div></div>
       <input class="num" inputmode="numeric" data-ing="${i}" value="${Math.round(x.grams)}" aria-label="גרמים">
       <span class="k n" id="ik${i}">${fmt(C.nutrition(x.per100, x.grams).k)}</span>
       <button class="iconbtn" data-act="rm" data-i="${i}" aria-label="הסרה">${icon('x')}</button></div>`).join('');
@@ -777,7 +777,7 @@ async function viewMeal(parts) {
     const f = APP.libById.get(x.foodId);
     if (!f) return '';
     return `<div class="confirmrow">${dot(f.per100.k, f.liquid)}
-      <div class="nm"><div class="t">${esc(f.name)}</div><div class="s">${x.portion ? `${x.portion.count === 1 ? '' : fmt1(x.portion.count) + ' × '}${esc(x.portion.name)}` : ''}</div></div>
+      <div class="nm"><div class="t">${esc(f.name)}</div><div class="s">${x.portion ? `${esc(countLabel(x.portion.name, x.portion.count))}` : ''}</div></div>
       <input class="num" inputmode="numeric" data-it="${i}" value="${Math.round(x.grams)}">
       <span class="k n" id="mk${i}">${fmt(C.nutrition(f.per100, x.grams).k)}</span>
       <button class="iconbtn" data-act="rm" data-i="${i}" aria-label="הסרה">${icon('x')}</button></div>`;

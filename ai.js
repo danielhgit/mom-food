@@ -40,6 +40,11 @@
     const byName = new Map(lib.filter((f) => !f.hidden).map((f) => [S.norm(f.name), f]));
     return (res.items || []).map((it) => {
       const mine = it.matched_library_name && byName.get(S.norm(it.matched_library_name));
+      if (mine && mine.per100 && mine.per100.once && mine.portions && mine.portions.length) {
+        // an omelette is counted in eggs, whatever grams the model guessed
+        const u = mine.portions[0], count = Math.max(1, Math.round((it.grams || u.grams) / u.grams));
+        return { food: S.viewLib(mine), grams: u.grams * count, portion: { name: u.name, count, grams: u.grams }, raw: it.name_he };
+      }
       if (mine) return { food: S.viewLib(mine), grams: Math.round(it.grams || mine.lastGrams || 100), raw: it.name_he };
       if (it.kcal100 == null) return { food: null, raw: it.name_he, query: it.name_he, grams: Math.round(it.grams || 100) };
       return {

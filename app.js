@@ -34,8 +34,15 @@ function relDay(d) {
   const diff = C.diffDays(d, today());
   return diff === 0 ? 'היום' : diff === 1 ? 'אתמול' : fmtDateLong(d);
 }
+const PLURAL = { 'ביצה': 'ביצים' };
+/* "2 ביצים" rather than "2 × ביצה" where Hebrew has a plain plural. */
+function countLabel(name, c) {
+  if (c === 1) return name === 'ביצה' ? 'ביצה אחת' : name;
+  return PLURAL[name] && Number.isInteger(c) ? `${fmt(c)} ${PLURAL[name]}` : `${c === 0.5 ? 'חצי ' : fmt1(c) + ' × '}${name}`;
+}
 function amountLabel(e) {
   if (e.quick) return 'הוספה מהירה';
+  if (e.portion && e.portion.name && e.per100 && e.per100.once) return countLabel(e.portion.name, e.portion.count);
   if (e.portion && e.portion.name) {
     const c = e.portion.count;
     const cnt = c === 1 ? '' : c === 0.5 ? 'חצי ' : fmt1(c) + ' × ';
@@ -138,6 +145,53 @@ async function loadLibrary() {
   APP.recipes = await DB.all('recipes');
   APP.meals = await DB.all('meals');
 }
+/* Foods the app keeps in her library. An omelette is counted by eggs, and the
+   spray of olive oil is counted once per pan (per100.once): the ministry's
+   "ביצה או חביתה מטוגנת בשמן זית" has only small/large portions and oil that
+   grows with the portion, which is not how she cooks. Egg values: ministry 1573
+   (fried without oil), 50 g an egg. Spray: about 1 g oil. */
+const BUILTIN_FOODS = [{
+  builtin: 'omelet-spray', name: 'חביתה עם תרסיס שמן זית',
+  per100: { k: 162, p: 14.2, f: 10.8, c: 0.8, once: { k: 9, p: 0, f: 1, c: 0 } },
+  portions: [{ name: 'ביצה', grams: 50 }], replaces: [1570],
+}];
+const REPLACED_MOH = new Set(BUILTIN_FOODS.flatMap((b) => b.replaces));
+/* Adds missing built-in foods; a ministry food they replace is hidden, and its
+   history (use counts, favourite) and her saved meals move to the new food. */
+async function ensureBuiltins() {
+  for (const b of BUILTIN_FOODS) {
+    let food = APP.lib.find((f) => f.builtin === b.builtin);
+    const old = APP.lib.filter((f) => !f.hidden && b.replaces.includes(f.mohCode));
+    if (food && !old.length) continue;
+    const unit = b.portions[0];
+    const units = (grams) => Math.max(1, Math.round((grams || 0) / 60));
+    if (!food) {
+      const o = [...old].sort((x, y) => (y.useCount || 0) - (x.useCount || 0))[0];
+      const slotCounts = { breakfast: 0, lunch: 0, dinner: 0, snack: 0 };
+      for (const x of old) for (const s of C.SLOTS) slotCounts[s] += (x.slotCounts && x.slotCounts[s]) || 0;
+      const count = o && o.lastGrams ? units(o.lastGrams) : 1;
+      food = newFood({
+        name: b.name, per100: { ...b.per100, once: { ...b.per100.once } }, portions: b.portions.map((p) => ({ ...p })),
+        source: 'builtin', builtin: b.builtin, slotCounts,
+        useCount: old.reduce((a, x) => a + (x.useCount || 0), 0), fav: old.some((x) => x.fav),
+        lastUsed: Math.max(0, ...old.map((x) => x.lastUsed || 0)),
+        lastGrams: unit.grams * count, lastPortion: { name: unit.name, grams: unit.grams, count },
+      });
+      await putFood(food);
+    }
+    const oldIds = new Set(old.map((x) => x.id));
+    for (const m of APP.meals) {
+      if (!m.items.some((it) => oldIds.has(it.foodId))) continue;
+      m.items = m.items.map((it) => {
+        if (!oldIds.has(it.foodId)) return it;
+        const count = units(it.grams);
+        return { foodId: food.id, name: food.name, grams: unit.grams * count, portion: { name: unit.name, grams: unit.grams, count } };
+      });
+      await DB.put('meals', m);
+    }
+    for (const x of old) { x.hidden = true; await putFood(x); }
+  }
+}
 function libFoods() { return APP.lib.filter((f) => !f.hidden); }
 function libViews() { return libFoods().map(S.viewLib); }
 function loadMoh() {
@@ -145,7 +199,7 @@ function loadMoh() {
   if (!APP.mohP) {
     APP.mohP = fetch('foods.json?v=' + CFG.VERSION)
       .then((r) => { if (!r.ok) throw new Error('המאגר לא נטען'); return r.json(); })
-      .then((d) => (APP.moh = d.foods))
+      .then((d) => (APP.moh = d.foods.filter((m) => !REPLACED_MOH.has(m.i))))
       .catch((e) => { APP.mohP = null; throw e; });
   }
   return APP.mohP;
@@ -202,11 +256,29 @@ async function bumpFood(food, slot, grams, portion) {
   food.lastPortion = portion ? { name: portion.name, grams: portion.grams, count: portion.count } : null;
   await putFood(food);
 }
+/* Entries that were merged into instead of created, with their state before
+   the merge, so "ביטול" puts them back rather than deleting them. */
+const MERGED = new WeakMap();
 async function logFoods(list, { slot, date, mealId, mealName } = {}) {
   const entries = [];
+  const d = date || today(), s = slot || nowSlot();
+  // a food with a once-per-pan part (omelette) is one pan per meal: more eggs
+  // go into the entry already there, so the oil is not counted again
+  const pans = list.some((it) => it.food.per100 && it.food.per100.once)
+    ? (await DB.range('entries', 'date', d, d)).filter((e) => e.slot === s && !e.quick) : [];
   for (const it of list) {
-    const e = makeEntry(it.food, { grams: it.grams, portion: it.portion, slot, date, mealId, mealName });
-    entries.push(e);
+    const pan = it.food.per100 && it.food.per100.once && [...entries, ...pans].find((e) => e.foodId === it.food.id);
+    if (pan) {
+      if (!MERGED.has(pan) && !entries.includes(pan)) MERGED.set(pan, { ...pan, portion: pan.portion && { ...pan.portion } });
+      const grams = pan.grams + Math.round(it.grams);
+      const portion = pan.portion && it.portion && pan.portion.name === it.portion.name
+        ? { ...pan.portion, count: pan.portion.count + it.portion.count } : null;
+      const n = C.nutrition(it.food.per100, grams);
+      Object.assign(pan, { grams, portion, k: n.k, p: n.p, f: n.f, c: n.c, per100: { ...it.food.per100 } });
+      if (!entries.includes(pan)) entries.push(pan);
+      continue;
+    }
+    entries.push(makeEntry(it.food, { grams: it.grams, portion: it.portion, slot, date, mealId, mealName }));
   }
   await DB.putMany('entries', entries);
   for (const it of list) await bumpFood(it.food, slot || nowSlot(), it.grams, it.portion);
@@ -214,7 +286,9 @@ async function logFoods(list, { slot, date, mealId, mealName } = {}) {
   return entries;
 }
 async function undoEntries(entries) {
-  await DB.delMany('entries', entries.map((e) => e.id));
+  await DB.delMany('entries', entries.filter((e) => !MERGED.has(e)).map((e) => e.id));
+  const restore = entries.filter((e) => MERGED.has(e)).map((e) => MERGED.get(e));
+  if (restore.length) await DB.putMany('entries', restore);
   for (const e of entries) {
     const f = APP.libById.get(e.foodId);
     if (f) {
@@ -301,6 +375,9 @@ function openFoodSheet(view, opts = {}) {
     if (unitP) { st.portion = unitP; st.count = 1; st.grams = unitP.grams; }
   }
   const unit = view.liquid ? 'מ״ל' : 'גרם';
+  // a food with a once-per-pan part is counted only in its unit (eggs), in whole numbers
+  const pan = !!(view.per100.once && portions.length);
+  if (pan && !st.portion) { st.portion = portions[0]; st.count = Math.max(1, Math.round(st.grams / st.portion.grams)); st.grams = st.portion.grams * st.count; }
 
   const render = () => {
     const n = C.nutrition(view.per100, st.grams);
@@ -309,11 +386,12 @@ function openFoodSheet(view, opts = {}) {
     const body = openModal(`
       <h3 class="row">${dot(view.per100.k, view.liquid)}<span class="grow">${esc(view.name)}</span>
         ${view.src === 'lib' ? `<button class="iconbtn" data-act="fav" aria-label="מועדף" style="color:${favOn ? 'var(--gold)' : 'var(--faint)'}">${icon(favOn ? 'starf' : 'star')}</button>` : ''}</h3>
-      <div class="faint">ל-100 ${unit}: <span class="n">${fmt(view.per100.k)}</span> קלוריות · <span class="n">${fmt1(view.per100.p)}</span> גרם חלבון</div>
+      ${pan ? `<div class="faint">${esc(portions[0].name)}: <span class="n">${fmt(view.per100.k * portions[0].grams / 100)}</span> קלוריות · תרסיס השמן <span class="n">${fmt(view.per100.once.k)}</span>, פעם אחת בכל טיגון</div>`
+        : `<div class="faint">ל-100 ${unit}: <span class="n">${fmt(view.per100.k)}</span> קלוריות · <span class="n">${fmt1(view.per100.p)}</span> גרם חלבון</div>`}
       <div class="preview"><span class="dnum" id="fsk">${fmt(n.k)}</span><span class="muted bold">קלוריות</span></div>
       <div class="macros" id="fsm">${macrosHtml(n)}</div>
       <div class="divider"></div>
-      ${portions.length ? `<div class="chips wrap">
+      ${portions.length && !pan ? `<div class="chips wrap">
         ${portions.map((p, i) => `<button class="chip ${st.portion && st.portion.name === p.name ? 'on' : ''}" data-act="portion" data-i="${i}">${esc(p.name)} <span class="sub n">${fmt(p.grams)}</span></button>`).join('')}
         <button class="chip ${!st.portion ? 'on' : ''}" data-act="gmode">${unit}</button>
       </div>` : ''}
@@ -323,7 +401,7 @@ function openFoodSheet(view, opts = {}) {
           <input class="num" id="fscount" inputmode="decimal" value="${fmt1(st.count)}">
           <button data-act="cplus" aria-label="יותר">${icon('plus')}</button>
         </div>
-        <div class="center faint" id="fsg" style="margin-top:4px">${esc(st.portion.name)} · סה״כ <span class="n">${fmt(st.grams)}</span> ${unit}</div>`
+        <div class="center faint" id="fsg" style="margin-top:4px">${pan ? esc(countLabel(st.portion.name, st.count)) : `${esc(st.portion.name)} · סה״כ <span class="n">${fmt(st.grams)}</span> ${unit}`}</div>`
       : `
         <div class="stepper" style="margin-top:8px">
           <button data-act="gminus" aria-label="פחות">${icon('minus')}</button>
@@ -344,7 +422,7 @@ function openFoodSheet(view, opts = {}) {
     const n = C.nutrition(view.per100, st.grams);
     const k = $('#fsk'); if (k) k.textContent = fmt(n.k);
     const m = $('#fsm'); if (m) m.innerHTML = macrosHtml(n);
-    const g = $('#fsg'); if (g && st.portion) g.innerHTML = `${esc(st.portion.name)} · סה״כ <span class="n">${fmt(st.grams)}</span> ${unit}`;
+    const g = $('#fsg'); if (g && st.portion) g.innerHTML = pan ? esc(countLabel(st.portion.name, st.count)) : `${esc(st.portion.name)} · סה״כ <span class="n">${fmt(st.grams)}</span> ${unit}`;
   };
   const onInput = (ev) => {
     if (ev.target.id === 'fsgrams') { st.grams = Math.max(0, num(ev.target.value) || 0); refresh(); }
@@ -358,8 +436,8 @@ function openFoodSheet(view, opts = {}) {
     if (act === 'portion') { st.portion = portions[+b.dataset.i]; st.count = 1; st.grams = st.portion.grams; render(); }
     else if (act === 'gmode') { st.portion = null; st.grams = Math.round(st.grams); render(); }
     else if (act === 'cminus' || act === 'cplus') {
-      const step = st.count < 1 || (act === 'cminus' && st.count <= 1) ? 0.5 : 1;
-      st.count = Math.max(0.5, st.count + (act === 'cplus' ? step : -step));
+      const step = pan ? 1 : st.count < 1 || (act === 'cminus' && st.count <= 1) ? 0.5 : 1;
+      st.count = Math.max(pan ? 1 : 0.5, st.count + (act === 'cplus' ? step : -step));
       st.grams = st.portion.grams * st.count; $('#fscount').value = fmt1(st.count); refresh();
     } else if (act === 'gminus' || act === 'gplus') {
       st.grams = Math.max(0, Math.round(st.grams) + (act === 'gplus' ? 10 : -10)); $('#fsgrams').value = st.grams; refresh();
@@ -378,7 +456,9 @@ function openFoodSheet(view, opts = {}) {
       }
       const entries = await logFoods([{ food, grams: st.grams, portion }], { slot: st.slot, date: opts.date });
       closeModal(); vibrate();
-      toast(`נרשם: ${food.name.split(',')[0]} · ${fmt(entries[0].k)}`, { label: 'ביטול', fn: () => undoEntries(entries) });
+      const e0 = entries[0];
+      toast(MERGED.has(e0) && e0.portion ? `נוסף לחביתה שכבר רשומה: ${countLabel(e0.portion.name, e0.portion.count)} · ${fmt(e0.k)}`
+        : `נרשם: ${food.name.split(',')[0]} · ${fmt(e0.k)}`, { label: 'ביטול', fn: () => undoEntries(entries) });
       if (opts.onDone) opts.onDone(entries); else if (opts.returnTo) go(opts.returnTo); else rerender();
     }
   };
@@ -423,7 +503,7 @@ function openConfirmList(items, opts = {}) {
         <button class="iconbtn" data-act="del" data-i="${i}" aria-label="הסרה">${icon('x')}</button></div>`;
     }
     const n = C.nutrition(x.food.per100, x.grams || 0);
-    const sub = x.portion ? `${x.portion.count === 1 ? '' : fmt1(x.portion.count) + ' × '}${esc(x.portion.name)}` : (x.estimated ? 'כמות משוערת' : (x.note || ''));
+    const sub = x.portion ? `${esc(countLabel(x.portion.name, x.portion.count))}` : (x.estimated ? 'כמות משוערת' : (x.note || ''));
     const tick = checklist
       ? `<button class="tick ${x.on ? 'on' : ''}" data-act="toggle" data-i="${i}" aria-label="${x.on ? 'לא אכלתי הפעם' : 'אכלתי'}" aria-pressed="${x.on}">${icon('check')}</button>`
       : dot(x.food.per100.k, x.food.liquid);
@@ -602,6 +682,7 @@ function openManualFood({ food, prefill = {}, note, onSaved }) {
     let saved;
     if (f) {
       const others = (f.portions || []).slice(1);
+      if (f.per100 && f.per100.once) per100.once = { ...f.per100.once };
       Object.assign(f, { name, per100, liquid, portions: pn && pg ? [{ name: pn, grams: pg }, ...others] : others });
       saved = await putFood(f);
     } else {
@@ -958,6 +1039,7 @@ async function boot() {
   }
   applyTextSize();
   await loadLibrary();
+  try { await ensureBuiltins(); } catch (e) { console.error(e); }
   restoreBasket();
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (_) {}
   window.addEventListener('hashchange', () => route());

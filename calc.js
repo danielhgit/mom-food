@@ -50,9 +50,12 @@
   }
 
   /* ---------------- nutrition ---------------- */
+  /* per100.once: a fixed part counted once per entry, however much of the food
+     (the spray of oil in an omelette: two eggs in one pan still get one spray). */
   function nutrition(per100, grams) {
     const f = (Number(grams) || 0) / 100;
-    return { k: Math.round(per100.k * f), p: r1(per100.p * f), f: r1(per100.f * f), c: r1(per100.c * f) };
+    const o = f > 0 && per100.once ? per100.once : { k: 0, p: 0, f: 0, c: 0 };
+    return { k: Math.round(per100.k * f + o.k), p: r1(per100.p * f + o.p), f: r1(per100.f * f + o.f), c: r1(per100.c * f + o.c) };
   }
   function sum(entries) {
     const t = { k: 0, p: 0, f: 0, c: 0 };
@@ -74,6 +77,8 @@
       raw += g;
       tot.k += ing.per100.k * g / 100; tot.p += ing.per100.p * g / 100;
       tot.f += ing.per100.f * g / 100; tot.c += ing.per100.c * g / 100;
+      const o = g > 0 && ing.per100.once;
+      if (o) { tot.k += o.k; tot.p += o.p; tot.f += o.f; tot.c += o.c; }
     }
     const weight = Number(cookedWeight) > 0 ? Number(cookedWeight) : raw;
     const per100 = weight > 0

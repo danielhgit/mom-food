@@ -199,7 +199,50 @@
       };
       return probe(lib, { nameOf: (x) => x.name, englishOf: () => '' }) || probe(moh, {});
     };
-    return segments(text, strong).map((seg) => resolve(seg, lib, moh));
+    // "חביתה משתי ביצים": the "מ" in front of a number means "made of"
+    const prepared = String(text || '').replace(/(^|\s)מ-?(?=\d|שתי|שלוש|ארבע|חמש|שש)/g, '$1');
+    const segs = segments(prepared, strong);
+    const items = segs.map((seg) => panItem(seg, lib) || resolve(seg, lib, moh));
+    // "חביתה, 3 ביצים" / "חביתה 3 ביצים": the eggs are the omelette's amount, not a second food
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (!it || !isPan(it.food)) continue;
+      for (const j of [i + 1, i - 1]) {
+        const seg = segs[j];
+        if (!items[j] || !seg || !seg.words.length || !seg.words.every((w) => unitWord(it.food, w))) continue;
+        setCount(it, it.food, seg.qty != null ? seg.qty : 1);
+        items[j] = null;
+        break;
+      }
+    }
+    return items.filter(Boolean);
+  }
+  /* Foods counted in a unit with a once-per-pan part (per100.once), e.g. an omelette in eggs. */
+  const isPan = (food) => !!(food && food.per100 && food.per100.once && food.portions && food.portions.length);
+  function unitWord(food, w) {
+    const u = norm(food.portions[0].name);
+    const st = S.stem(u) || u;
+    return w === u || w.startsWith(st.length >= 3 ? st : u);
+  }
+  function setCount(item, food, qty) {
+    const p = food.portions[0];
+    item.food = food; item.grams = Math.round(p.grams * qty); item.estimated = false; item.confidence = 'high';
+    item.portion = { name: p.name, count: qty, grams: p.grams };
+  }
+  /* "שתי ביצים חביתה" in one segment: the egg word is the unit of her pan food. */
+  function panItem(seg, lib) {
+    const pans = (lib || []).filter(isPan);
+    if (!pans.length || seg.words.length < 2) return null;
+    for (const food of pans) {
+      const rest = seg.words.filter((w) => !unitWord(food, w));
+      if (rest.length === seg.words.length || !rest.length) continue;
+      const hit = pickFood(rest.join(' '), [food], null, null);
+      if (!hit) continue;
+      const item = { raw: seg.words.join(' '), query: rest.join(' '), food: null, grams: null, portion: null, estimated: false, confidence: 'high' };
+      setCount(item, food, seg.qty != null ? seg.qty : 1);
+      return item;
+    }
+    return null;
   }
 
   /* "30 גרם" / "פרוסה" / "2 כפות" → {qty, unit} without a food. */
