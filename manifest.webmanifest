@@ -1,0 +1,21 @@
+{
+  "name": "צלחת",
+  "short_name": "צלחת",
+  "description": "מעקב אכילה ומשקל פשוט",
+  "dir": "rtl",
+  "lang": "he",
+  "start_url": "./#/",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#faf6f0",
+  "theme_color": "#faf6f0",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    { "name": "הוספה", "short_name": "הוספה", "url": "./#/add", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
+    { "name": "משקל", "short_name": "משקל", "url": "./#/progress", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] }
+  ]
+}
