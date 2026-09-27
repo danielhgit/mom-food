@@ -6,6 +6,19 @@
   const r1 = (x) => Math.round(x * 10) / 10;
   /* Needs her Worker AND a Gemini key on it (reported by /ping at boot). */
   function enabled() { return !!(root.CFG && root.CFG.API_URL && root.APP && root.APP.ui && root.APP.ui.aiReady === true); }
+  /* The camera button shows whenever the app has a Worker, and asks /ping on
+     the spot. Hiding it until a boot-time ping had succeeded left it missing
+     on her phone, with nothing to tell her why. */
+  function configured() { return !!(root.CFG && root.CFG.API_URL); }
+  async function ensureReady() {
+    if (enabled()) return true;
+    if (!configured()) return false;
+    try {
+      const st = await fetch(root.CFG.API_URL.replace(/\/$/, '') + '/ping').then((r) => r.json());
+      if (st.ai) await root.saveUi({ aiReady: true });
+      return !!st.ai;
+    } catch (_) { return false; }
+  }
 
   async function call(kind, payload) {
     const auth = await root.Cloud.authHeader();
@@ -106,5 +119,5 @@
     return text;
   }
 
-  root.AI = { enabled, describe, plate, label, coach };
+  root.AI = { enabled, configured, ensureReady, describe, plate, label, coach };
 })(window);

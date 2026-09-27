@@ -386,6 +386,7 @@ async function viewAdd(parts, params) {
   const date = params.date && params.date <= today() ? params.date : today();
   let slot = params.slot || nowSlot();
   const aiOn = !!(window.AI && AI.enabled() && APP.ui.aiEnabled !== false);
+  const camOn = !!(window.AI && AI.configured());
   setTitle(date === today() ? 'הוספה' : 'הוספה ל' + relDay(date));
   const dayEntries = await DB.byIndex('entries', 'date', date);
   const slotSum = () => C.sum(dayEntries.filter((e) => e.slot === slot)).k;
@@ -413,7 +414,7 @@ async function viewAdd(parts, params) {
     /* The camera sits above her own tiles, the way the photo trackers put it:
        her meals stay one tap away right underneath, and the Today screen is
        untouched. */
-    let html = aiOn
+    let html = camOn
       ? `<button class="btn ghost block platebtn" id="platebtn" data-act="plate">${icon('camera')}לצלם את הצלחת</button>
          <div class="center platealt"><button class="linkbtn small" data-act="plategallery">או לבחור תמונה מהגלריה</button></div>`
       : '';
@@ -452,7 +453,7 @@ async function viewAdd(parts, params) {
         <input type="checkbox" id="plan" ${APP.planMode ? 'checked' : ''} style="width:22px;height:22px">
         לתכנן לפני שאוכלים (מוסיפים לסל ורואים כמה יישאר)</label>`;
     $('#home').innerHTML = html;
-    if (aiOn && window.Tour) {
+    if (camOn && window.Tour) {
       Tour.tip('plate', '#platebtn',
         'לוחצים כאן ומצלמים את הצלחת מלמעלה. אם יש בתמונה מזלג או יד, אני מעריכה את הכמויות הרבה יותר טוב.');
     }
@@ -547,8 +548,19 @@ async function viewAdd(parts, params) {
     } else if (act === 'quickk') {
       openQuickKcal({ slot, date });
     } else if (act === 'plate' || act === 'plategallery') {
+      /* The picker opens first, straight from her tap: a network wait before
+         it could cost the tap and the camera would not open. */
       const file = await pickImage({ camera: act === 'plate' }); if (!file) return;
+      if (APP.ui.aiEnabled === false) {
+        if (!confirm('העזרה החכמה כבויה. כדי לזהות את הצלחת התמונה נשלחת ל-Google. להפעיל אותה?')) return;
+        await saveUi({ aiEnabled: true });
+      }
       openModal(`<h3>מסתכלת על הצלחת…</h3><div class="sk" style="height:90px"></div>`);
+      if (!(await AI.ensureReady())) {
+        closeModal();
+        toast(online() ? 'הזיהוי מהתמונה לא זמין כרגע. אפשר לכתוב במילים' : 'אין אינטרנט כרגע');
+        return;
+      }
       try {
         const { items, image } = await AI.plate(file, libFoods());
         if (!items.length) { closeModal(); toast('לא הצלחתי לזהות. אפשר לכתוב במילים'); return; }
