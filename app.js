@@ -302,7 +302,7 @@ async function undoEntries(entries) {
 }
 function afterDataChange(date) {
   APP.lastChange = Date.now();
-  if (window.Cloud && Cloud.enabled()) Cloud.heartbeat().catch(() => {});
+  if (window.Cloud && Cloud.enabled()) { Cloud.heartbeat().catch(() => {}); Cloud.save(); }
 }
 async function copyEntries(src, { date, slot }) {
   const copies = src.map((e) => ({ ...e, id: uid('e'), date: date || today(), time: C.hhmm(), slot: slot || e.slot }));
@@ -491,6 +491,7 @@ function openConfirmList(items, opts = {}) {
       ${opts.note ? `<div class="note" style="margin:-6px 0 8px">${opts.note}</div>` : ''}
       ${checklist ? '<div class="note" style="margin:-6px 0 8px">מה שלא אכלת הפעם, מורידים את הסימון. הארוחה הקבועה לא משתנה.</div>' : ''}
       <div id="clrows">${st.items.map((x, i) => rowHtml(x, i)).join('')}</div>
+      ${opts.refine ? `<button class="btn ghost block" data-act="refine" style="margin-top:10px">${icon('sparkle')}${esc(opts.refineLabel || 'משהו שלא ראיתי? לכתוב במילים')}</button>` : ''}
       <div class="spread" style="margin:12px 2px">
         <button class="linkbtn" data-act="addrow">${icon('plus', 'sm')}עוד מאכל</button>
         <span class="bold">סה״כ <span class="dnum big" id="cltotal">${fmt(total)}</span> קלוריות</span>
@@ -541,6 +542,37 @@ function openConfirmList(items, opts = {}) {
     if (act === 'slot') { st.slot = b.dataset.s; render(); }
     else if (act === 'del') { st.items.splice(+b.dataset.i, 1); render(); }
     else if (act === 'toggle') { const x = st.items[+b.dataset.i]; x.on = !x.on; vibrate(8); render(); }
+    /* Her words beat the photo. Published work puts image-only calorie error
+       near a third, and roughly halves it once the model is told what is
+       actually in the dish, so this is the cheapest accuracy we can buy. */
+    else if (act === 'refine') {
+      const prev = st.items.filter((x) => x.on).map((x) => (x.food ? x.food.name : x.raw)).filter(Boolean);
+      const box = openModal(`
+        <h3>מה עוד יש בצלחת?</h3>
+        <div class="note" style="margin:-6px 0 10px">אפשר לכתוב מה שלא רואים בתמונה — שמן, רוטב, סוכר — או לתקן מאכל שזיהיתי לא נכון. אני אחשב הכול מחדש.</div>
+        <textarea id="rfn" placeholder="למשל: הסלט עם כף טחינה, והאורז בושל בשתי כפות שמן"></textarea>
+        <button class="btn block" data-act="rfngo" style="margin-top:12px">${icon('check')}לחשב מחדש</button>
+        <div class="center"><button class="linkbtn" data-act="rfnback" style="color:var(--muted)">חזרה בלי שינוי</button></div>
+      `);
+      box.onclick = async (e2) => {
+        const t = e2.target.closest('[data-act]');
+        if (!t) return;
+        if (t.dataset.act === 'rfnback') { render(); return; }
+        if (t.dataset.act !== 'rfngo') return;
+        const note = ($('#rfn') ? $('#rfn').value : '').trim();
+        if (!note) { render(); return; }
+        openModal('<h3>מחשבת מחדש…</h3><div class="sk" style="height:90px"></div>');
+        try {
+          const fresh = await opts.refine(note, prev);
+          if (fresh && fresh.length) st.items = fresh.map((x) => ({ on: true, ...x }));
+          else toast('לא הצלחתי לעדכן, הרשימה נשארה כמו שהייתה');
+        } catch (err) {
+          toast(typeof aiErrorText === 'function' ? aiErrorText(err) : 'העזרה החכמה לא זמינה כרגע');
+        }
+        render();
+      };
+      setTimeout(() => { const i = $('#rfn'); if (i) i.focus(); }, 250);
+    }
     else if (act === 'pick' || act === 'addrow') {
       const idx = act === 'pick' ? +b.dataset.i : -1;
       const query = idx >= 0 ? (st.items[idx].query || (st.items[idx].food ? st.items[idx].food.name.split(',')[0] : st.items[idx].raw) || '') : '';
@@ -1059,6 +1091,13 @@ async function boot() {
     return;
   }
   applyTextSize();
+  /* Before anything reads the library: if the identity came back but the
+     journal did not, pull her own backup silently. She never sees a recovery
+     code, she just finds her app the way she left it. */
+  if (window.Cloud && Cloud.enabled()) {
+    DB.onWrite = () => Cloud.save();
+    try { if (await Cloud.autoRestore()) setTimeout(() => toast('הנתונים שלך חזרו מהגיבוי'), 900); } catch (_) {}
+  }
   await loadLibrary();
   try { await ensureBuiltins(); } catch (e) { console.error(e); }
   restoreBasket();

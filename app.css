@@ -92,6 +92,13 @@ p{margin:.4em 0}
 .btn:active{filter:brightness(.92); transform:translateY(1px)}
 .btn.block{display:flex; width:100%}
 .btn.ghost{background:var(--card); color:var(--text); border:1.5px solid var(--line)}
+/* the camera, at the top of the add screen: loud enough to find, quiet enough
+   not to outshout her own meals right underneath it */
+.platebtn{margin-bottom:14px; border-color:var(--accent2); background:var(--accent-soft);
+  color:var(--accent); font-weight:700}
+.platebtn .ic{width:22px; height:22px}
+.platebtn:has(+ .platealt){margin-bottom:2px}
+.platealt{margin-bottom:10px}
 .btn.soft{background:var(--accent-soft); color:var(--accent)}
 .btn.goodbtn{background:var(--good)}
 .btn.small{min-height:42px; padding:0 14px; font-size:.9rem; border-radius:12px}

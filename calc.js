@@ -308,7 +308,57 @@
 
   /* What the day-close note is built from, besides today's numbers: how this
      day compares with her usual days, and what she already eats that has protein. */
-  function coachFacts(entries, totalsMap, date, recentEntries) {
+  /* Foods the app must never SUGGEST. Logging them is always fine — the whole
+     voice of the day-close note is that she writes down the wine too — this is
+     only about what the app puts in her mouth as an idea.
+
+     The seed is deliberately short. The guidelines are clear that no food has
+     been shown to trigger flares for everyone (AGA 2024, NIDDK), so a long
+     blanket list would be wrong and, for a woman in her 60s, actively harmful:
+     stripping out food groups is how calcium and bone density go. What is here
+     is (a) what Daniel says SHE cannot have, and (b) the few items with a
+     UC-specific signal — alcohol and red/processed meat (Jowett 2004) — plus
+     ultra-processed, sugary drinks, deep-fried and polyols. Editable in
+     settings, because triggers are individual. */
+  const AVOID_SEED = [
+    'חלב', 'חלבי', 'גבינה', 'גבינת', 'גבינות', 'קוטג', 'יוגורט', 'שמנת', 'לבנה', 'חמאה', 'גלידה',
+    'יין', 'בירה', 'וודקה', 'ויסקי', 'ערק', 'אלכוהול',
+    'נקניק', 'נקניקיה', 'נקניקיות', 'סלמי', 'פסטרמה', 'קבב', 'בשר בקר', 'בקר', 'כבש', 'המבורגר',
+    'מטוגן', 'מטוגנת', 'שניצל', "צ'יפס", 'ציפס', 'קולה', 'משקה מוגז', 'חטיף', 'חטיפים',
+    'ללא סוכר', 'דיאט', 'מסטיק',
+  ];
+  /* Mediterranean, dairy-free, and gentle when cooked soft: what the note
+     falls back on when nothing she already eats fits. */
+  const SAFE_PROTEIN = ['ביצה', 'דג', 'עוף', 'טונה', 'טחינה', 'טופו', 'עדשים'];
+
+  const PREFIX = 'בלכמשהו';
+  function words(name) {
+    return String(name || '').replace(/['׳"״]/g, '').split(/[^֐-׿\w%]+/).filter(Boolean)
+      .flatMap((w) => (w.length > 3 && PREFIX.includes(w[0]) ? [w, w.slice(1)] : [w]));
+  }
+  /* Mentioning what she ate is fine and wanted — "רשמת גם את היין, ככה רואים
+     את התמונה האמיתית" is one of the good lines. What must never happen is the
+     app OFFERING one of these foods. The note is always two sentences, the
+     first about today and the second the idea for tomorrow, so only the idea
+     is held to the list. */
+  function suggestsAvoided(text, avoid) {
+    const parts = String(text || '').split(/(?<=\.)\s+/);
+    return avoidsFood(parts.length > 1 ? parts.slice(1).join(' ') : text, avoid);
+  }
+
+  /* Word-level, not substring: "חלב" must not match "חלבון". */
+  function avoidsFood(name, avoid) {
+    const list = avoid && avoid.length ? avoid : AVOID_SEED;
+    const clean = String(name || '').replace(/['׳"״]/g, '');
+    const ws = new Set(words(name));
+    return list.some((raw) => {
+      const term = String(raw || '').replace(/['׳"״]/g, '').trim();
+      if (!term) return false;
+      return term.includes(' ') ? clean.includes(term) : ws.has(term);
+    });
+  }
+
+  function coachFacts(entries, totalsMap, date, recentEntries, avoid) {
     const meals = { breakfast: [], lunch: [], dinner: [], snack: [] };
     for (const e of entries) {
       const list = meals[e.slot] || meals.snack;
@@ -325,6 +375,7 @@
     const count = new Map();
     for (const e of recentEntries || []) {
       if (!e.k || e.k < 40 || e.k > 250 || (e.p || 0) * 10 < e.k || e.liquid) continue;
+      if (avoidsFood(e.name, avoid)) continue;   // she eats it, but the app never suggests it
       count.set(e.name, (count.get(e.name) || 0) + 1);
     }
     const proteinFood = [...count].sort((a, b) => b[1] - a[1]).map((x) => x[0])[0] || null;
@@ -353,7 +404,7 @@
     else if (dinner > 0 && !m.snack.length) first = 'היום עבר בלי נשנושים בין הארוחות.';
     else first = 'רשמת את כל היום, וזה מה שעושה את ההבדל.';
     let second;
-    if (proteinGoal && protein < proteinGoal * 0.8) second = `מחר אפשר להוסיף ${proteinFood || 'ביצה או קוטג\''} לצהריים, זה מחזיק עד הערב.`;
+    if (proteinGoal && protein < proteinGoal * 0.8) second = `מחר אפשר להוסיף ${proteinFood || 'ביצה או דג'} לצהריים, זה מחזיק עד הערב.`;
     else if (streakDays >= 3) second = 'עוד יום ברצף של רישום, ממשיכות ככה.';
     else second = 'מחר ממשיכים באותה דרך.';
     return first + ' ' + second;
@@ -368,6 +419,7 @@
     dayTotals, loggedSet, streak, weekAverage,
     avgWindow, kgNow, weightSeries, forecast, calibration,
     eveningCombos, wins, scaleNote, milestones, coachFacts, coachLocal,
+    AVOID_SEED, SAFE_PROTEIN, avoidsFood, suggestsAvoided,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.Calc = api;

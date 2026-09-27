@@ -56,6 +56,8 @@
     });
   }
 
+  const touched = (out) => { try { if (DB.onWrite) DB.onWrite(); } catch (_) {} return out; };
+
   const DB = {
     STORES: Object.keys(STORES),
 
@@ -67,6 +69,10 @@
       const db = await open();
       return wrap(db.transaction(store).objectStore(store).getAll());
     },
+    async count(store) {
+      const db = await open();
+      return wrap(db.transaction(store).objectStore(store).count());
+    },
     async byIndex(store, index, value) {
       const db = await open();
       return wrap(db.transaction(store).objectStore(store).index(index).getAll(IDBKeyRange.only(value)));
@@ -77,32 +83,50 @@
       const src = index ? os.index(index) : os;
       return wrap(src.getAll(IDBKeyRange.bound(lo, hi)));
     },
+    /* Set by the app to Cloud.save. Every write goes through here, so a recipe,
+       a measurement or a settings change schedules the same full backup that
+       logging a meal does — nothing is ever only on the phone. */
+    onWrite: null,
+
     put(store, obj) {
-      return run([store], 'readwrite', (t) => { t.objectStore(store).put(obj); });
+      return run([store], 'readwrite', (t) => { t.objectStore(store).put(obj); }).then(touched);
     },
     putMany(store, arr) {
       return run([store], 'readwrite', (t) => {
         const os = t.objectStore(store);
         for (const o of arr) os.put(o);
-      });
+      }).then(touched);
     },
     del(store, key) {
-      return run([store], 'readwrite', (t) => { t.objectStore(store).delete(key); });
+      return run([store], 'readwrite', (t) => { t.objectStore(store).delete(key); }).then(touched);
     },
     delMany(store, keys) {
       return run([store], 'readwrite', (t) => {
         const os = t.objectStore(store);
         for (const k of keys) os.delete(k);
-      });
+      }).then(touched);
     },
 
     /* ---- settings: kept in memory, mirrored to localStorage ---- */
+    /* The mirror is not only a fallback for a failed read. A browser can drop
+       IndexedDB on its own (storage pressure, "clear site data") while
+       localStorage survives, and then the settings store opens perfectly well
+       and is simply empty. Any key that only the mirror still has is taken
+       back and written into IndexedDB, so her identity, profile and setup
+       return without her typing a recovery code. */
     async loadSettings() {
+      let mirror = {};
+      try { mirror = JSON.parse(localStorage.getItem(LS_KEY) || '{}') || {}; } catch (_) {}
       const out = {};
       try {
         for (const row of await DB.all('settings')) out[row.key] = row.value;
       } catch (e) {
-        try { Object.assign(out, JSON.parse(localStorage.getItem(LS_KEY) || '{}')); } catch (_) {}
+        return { ...mirror };
+      }
+      for (const k of Object.keys(mirror)) {
+        if (k in out) continue;
+        out[k] = mirror[k];
+        try { await DB.put('settings', { key: k, value: mirror[k] }); } catch (_) {}
       }
       return out;
     },

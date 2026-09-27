@@ -46,6 +46,22 @@
       ],
     },
     {
+      id: 'plate', icon: 'camera', title: 'לצלם את הצלחת', sub: 'מצלמים, והאפליקציה מזהה לבד', routes: ['add'],
+      unavailable: () => (window.AI && AI.enabled() ? null : 'הזיהוי מהתמונה צריך חיבור לאינטרנט. כשיהיה חיבור, אפשר לחזור להדרכה הזו.'),
+      steps: [
+        { route: '#/add', el: '#platebtn', missing: 'הזיהוי מהתמונה לא פעיל כרגע. צריך חיבור לאינטרנט.',
+          text: 'לוחצים כאן, והמצלמה נפתחת. מצלמים את הצלחת מלמעלה, ואם יש מזלג או יד בתמונה הכמויות יוצאות מדויקות יותר.', wait: 'tap' },
+        // she still has to shoot the photo and wait for the answer, so this step is patient
+        { el: '#clrows', waitMs: 180000, missing: 'לא הגיע זיהוי. אפשר לנסות שוב מתי שרוצים.',
+          text: 'זה מה שזוהה בצלחת. כל שורה היא מאכל, והמספר מימין הוא הגרמים. אפשר לתקן אותו.', wait: 'next' },
+        { el: '#modalbody [data-act="refine"]', skipIf: () => !$('#modalbody [data-act="refine"]'),
+          text: 'מה שלא רואים בתמונה — שמן, רוטב, סוכר — לוחצים כאן וכותבים במילים, ואני מחשבת הכול מחדש.', wait: 'next' },
+        { el: '#modalbody [data-act="save"]', text: 'כשהכול נכון, לוחצים כאן והכול נרשם.', wait: 'tap' },
+        toastStep,
+        { done: 'זהו. צילום אחד, וכל הצלחת נרשמה. מה שהיא לא מזהה, תמיד אפשר לכתוב במילים.' },
+      ],
+    },
+    {
       id: 'search', icon: 'search', title: 'מאכל שלא ברשימה', sub: 'לחפש מאכל חדש', routes: ['add'],
       steps: [
         { route: '#/add', el: '#q', text: 'כותבים כאן את שם המאכל.',
@@ -233,7 +249,7 @@
         if (step.advanceWhen) {
           run.poll = setInterval(() => { if (run && run.step === step && step.advanceWhen()) next(); }, 300);
         }
-      } else if (Date.now() - started > WAIT_MS) {
+      } else if (Date.now() - started > (step.waitMs || WAIT_MS)) {
         clearInterval(run.poll);
         end(false, step.missing || 'ההדרכה נעצרה. אפשר להתחיל שוב מתי שרוצים.');
       }

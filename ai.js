@@ -18,12 +18,29 @@
     return res.json();
   }
 
+  /* Big phone photos (50–200 MP on some Samsungs) can make createImageBitmap
+     fail for lack of memory, so fall back to a plain <img>. */
+  async function decodeImage(file) {
+    if (root.createImageBitmap) {
+      try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch (e) { /* fall through */ }
+    }
+    const url = URL.createObjectURL(file);
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      return img;
+    } finally { setTimeout(() => URL.revokeObjectURL(url), 1000); }
+  }
+
   async function imageToB64(file, max) {
-    const bmp = await createImageBitmap(file);
-    const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
+    const bmp = await decodeImage(file);
+    const w = bmp.naturalWidth || bmp.width, h = bmp.naturalHeight || bmp.height;
+    const scale = Math.min(1, max / Math.max(w, h));
     const c = document.createElement('canvas');
-    c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+    c.width = Math.round(w * scale); c.height = Math.round(h * scale);
     c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    if (bmp.close) bmp.close();
     const blob = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.82));
     const bytes = new Uint8Array(await blob.arrayBuffer());
     let s = '';
@@ -58,8 +75,13 @@
   async function describe(text, lib) {
     return toItems(await call('describe', { text, library: libraryNames(lib) }), lib);
   }
-  async function plate(file, lib) {
-    return toItems(await call('plate', { image: await imageToB64(file, 1024), library: libraryNames(lib) }), lib);
+  /* Returns the items AND the encoded photo, so that "משהו שלא ראיתי" can send
+     her correction back with the same picture instead of asking her to shoot
+     it again. note = what she typed, previous = what the model said last time. */
+  async function plate(file, lib, { image, note = '', previous = [] } = {}) {
+    const b64 = image || (await imageToB64(file, 1024));
+    const res = await call('plate', { image: b64, library: libraryNames(lib), note, previous });
+    return { items: toItems(res, lib), image: b64 };
   }
   async function label(file) {
     const r = await call('label', { image: await imageToB64(file, 1400) });
@@ -72,9 +94,16 @@
     const v = (x, round) => (x == null || isNaN(x) ? '' : round(x));
     return { name: r.product_name || '', k: v(kcal, Math.round), p: v(protein, r1), f: v(fat, r1), c: v(carb, r1), liquid: r.per === '100ml' };
   }
+  /* The avoid list goes up with the day, and the answer is checked against it
+     again here: a note that names something she must not be offered is dropped
+     and the app's own note is shown instead. Belt and braces, because the
+     Worker may be an older deploy than the app. */
   async function coach(summary) {
-    const r = await call('coach', summary);
-    return r && r.text ? String(r.text).trim() : null;
+    const avoid = (root.APP.profile && root.APP.profile.avoid) || root.Calc.AVOID_SEED;
+    const r = await call('coach', { ...summary, avoid });
+    const text = r && r.text ? String(r.text).trim() : null;
+    if (!text || root.Calc.suggestsAvoided(text, avoid)) return null;
+    return text;
   }
 
   root.AI = { enabled, describe, plate, label, coach };

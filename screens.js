@@ -50,11 +50,24 @@ function ringSvg(pct, color) {
     ${p > 0 ? `<circle cx="75" cy="75" r="${r}" fill="none" stroke="${color}" stroke-width="13" stroke-linecap="round" stroke-dasharray="${(c * p).toFixed(1)} ${c.toFixed(1)}"/>` : ''}
   </svg>`;
 }
-function pickImage() {
+/* The input lives in the page while the camera is open: on Android the camera
+   is a separate app, and a detached input can be garbage-collected before the
+   photo comes back, so 'change' never fires and nothing happens (worked on
+   iPhone, failed on her Samsung). camera:false opens the gallery instead, for
+   a photo taken with the phone's own camera app. */
+function pickImage({ camera = true } = {}) {
   return new Promise((resolve) => {
+    const old = document.getElementById('imgpick');
+    if (old) old.remove();
     const inp = document.createElement('input');
-    inp.type = 'file'; inp.accept = 'image/*'; inp.capture = 'environment';
-    inp.onchange = () => resolve(inp.files && inp.files[0] ? inp.files[0] : null);
+    inp.id = 'imgpick'; inp.type = 'file'; inp.accept = 'image/*';
+    if (camera) inp.setAttribute('capture', 'environment');
+    inp.style.cssText = 'position:fixed;left:-9999px;width:1px;height:1px;opacity:0';
+    document.body.appendChild(inp);
+    let done = false;
+    const finish = (file) => { if (done) return; done = true; inp.remove(); resolve(file); };
+    inp.onchange = () => finish(inp.files && inp.files[0] ? inp.files[0] : null);
+    inp.addEventListener('cancel', () => finish(null));
     inp.click();
   });
 }
@@ -314,7 +327,8 @@ function openCloseDay(ctx, date, entries) {
   const streakDays = C.streak(C.loggedSet(ctx.totals, [...closedPlus]), ctx.t);
   const tdee = C.currentTdee(APP.profile, ctx.kg, ctx.t);
   const avg7 = C.avgWindow(ctx.weights, ctx.t, 7) ?? ctx.kg;
-  const facts = C.coachFacts(entries, ctx.totals, date, ctx.recent.filter((e) => e.date >= C.addDays(date, -30)));
+  const avoid = APP.profile.avoid || C.AVOID_SEED;
+  const facts = C.coachFacts(entries, ctx.totals, date, ctx.recent.filter((e) => e.date >= C.addDays(date, -30)), avoid);
   let note = C.coachLocal({ protein: tot.p, proteinGoal: ctx.pGoal, streakDays, ...facts });
   // Gemini writes the note when it can. Until it answers (or gives up) the card shows
   // a quiet placeholder, so the text never changes in front of her.
@@ -396,7 +410,13 @@ async function viewAdd(parts, params) {
     const foods = foodsForSlot(slot);
     const LIMIT = 12;
     const shown = showAllFoods ? foods : foods.slice(0, LIMIT);
-    let html = '';
+    /* The camera sits above her own tiles, the way the photo trackers put it:
+       her meals stay one tap away right underneath, and the Today screen is
+       untouched. */
+    let html = aiOn
+      ? `<button class="btn ghost block platebtn" id="platebtn" data-act="plate">${icon('camera')}לצלם את הצלחת</button>
+         <div class="center platealt"><button class="linkbtn small" data-act="plategallery">או לבחור תמונה מהגלריה</button></div>`
+      : '';
     if (meals.length) {
       html += `<h2 class="section">${icon('book')}הארוחות שלי</h2>
         ${meals.map((m) => `<div class="mealtile" data-act="meal" data-id="${m.id}">
@@ -423,7 +443,6 @@ async function viewAdd(parts, params) {
       <div class="chips wrap">
         <button class="chip" data-act="freetext">${icon('mic')}לכתוב או להגיד</button>
         <button class="chip" data-act="barcode">${icon('barcode')}לסרוק ברקוד</button>
-        ${aiOn ? `<button class="chip" data-act="plate">${icon('camera')}לצלם צלחת</button>` : ''}
         ${aiOn ? `<button class="chip" data-act="label">${icon('label')}לצלם תווית</button>` : ''}
         <button class="chip" data-act="openmoh">${icon('search')}מאכל שלא ברשימה</button>
         <button class="chip" data-act="quickk">${icon('bolt')}רק קלוריות</button>
@@ -433,6 +452,10 @@ async function viewAdd(parts, params) {
         <input type="checkbox" id="plan" ${APP.planMode ? 'checked' : ''} style="width:22px;height:22px">
         לתכנן לפני שאוכלים (מוסיפים לסל ורואים כמה יישאר)</label>`;
     $('#home').innerHTML = html;
+    if (aiOn && window.Tour) {
+      Tour.tip('plate', '#platebtn',
+        'לוחצים כאן ומצלמים את הצלחת מלמעלה. אם יש בתמונה מזלג או יד, אני מעריכה את הכמויות הרבה יותר טוב.');
+    }
   };
 
   const drawResults = async () => {
@@ -523,13 +546,17 @@ async function viewAdd(parts, params) {
       openManualFood({ onSaved: (f) => openFoodSheet(S.viewLib(f), sheetOpts) });
     } else if (act === 'quickk') {
       openQuickKcal({ slot, date });
-    } else if (act === 'plate') {
-      const file = await pickImage(); if (!file) return;
+    } else if (act === 'plate' || act === 'plategallery') {
+      const file = await pickImage({ camera: act === 'plate' }); if (!file) return;
       openModal(`<h3>מסתכלת על הצלחת…</h3><div class="sk" style="height:90px"></div>`);
       try {
-        const items = await AI.plate(file, libFoods());
+        const { items, image } = await AI.plate(file, libFoods());
         if (!items.length) { closeModal(); toast('לא הצלחתי לזהות. אפשר לכתוב במילים'); return; }
-        openConfirmList(items, { title: 'זה מה שראיתי', note: 'הערכה בלבד. כדאי לתקן כמויות אם צריך.', slot, date, onSaved: afterLog });
+        openConfirmList(items, {
+          title: 'זה מה שראיתי', note: 'הערכה בלבד. כדאי לתקן כמויות אם צריך.', slot, date, onSaved: afterLog,
+          /* Same photo, her words on top — no need to shoot the plate again. */
+          refine: async (note, previous) => (await AI.plate(null, libFoods(), { image, note, previous })).items,
+        });
       } catch (e) { closeModal(); toast(aiErrorText(e)); }
     } else if (act === 'label') {
       const file = await pickImage(); if (!file) return;
@@ -1228,6 +1255,13 @@ async function viewSettings() {
       ${aiAvail ? `<label class="row" style="min-height:52px"><input type="checkbox" id="sai" ${APP.ui.aiEnabled !== false ? 'checked' : ''} style="width:24px;height:24px"><span class="grow"><b>עזרה חכמה</b><br><span class="faint">צילום צלחת, קריאת תוויות והבנת טקסט. התמונות והטקסט נשלחים ל-Google לעיבוד.</span></span></label>` : ''}
       ${pushAvail ? `<label class="row" style="min-height:52px"><input type="checkbox" id="spush" ${APP.ui.pushEnabled ? 'checked' : ''} style="width:24px;height:24px"><span class="grow"><b>תזכורות</b><br><span class="faint">בערב, רק אם עוד לא רשמת ארוחת ערב. ובבוקר של יום המדידה.</span></span></label>` : ''}
     </div>` : ''}
+    <div class="card"><h3>מאכלים שלא להציע</h3>
+      <p class="note">אפשר לרשום כאן הכול, גם מה שברשימה. הרשימה משפיעה רק על ההצעות של האפליקציה: מה שכתוב כאן לא יוצע לך אף פעם כרעיון.</p>
+      <label class="field" style="margin-top:10px"><span>הרשימה</span>
+        <textarea id="savoid" placeholder="למשל: גבינה, יין, נקניק">${esc((p.avoid || C.AVOID_SEED).join(', '))}</textarea>
+        <small>מופרדים בפסיק. ריק = הרשימה הרגילה.</small></label>
+      <button class="btn ghost block" data-act="avoidreset" style="margin-top:8px">לחזור לרשימה הרגילה</button></div>
+
     <a class="linkrow" href="#/backup">${icon('cloud')}גיבוי ושחזור${icon('chev', 'chev')}</a>
   `);
   const saved = () => { toast('נשמר'); rerender(); };
@@ -1236,6 +1270,7 @@ async function viewSettings() {
     if (b.dataset.act === 'deficit') { await saveProfile({ deficit: +b.dataset.v }); saved(); }
     else if (b.dataset.act === 'text') { await saveProfile({ textSize: b.dataset.v }); applyTextSize(); saved(); }
     else if (b.dataset.act === 'uncal') { await saveProfile({ tdeeActual: null }); saved(); }
+    else if (b.dataset.act === 'avoidreset') { await saveProfile({ avoid: null }); saved(); }
   };
   VIEW.onchange = async (ev) => {
     const el = ev.target;
@@ -1243,6 +1278,10 @@ async function viewSettings() {
     else if (el.id === 'sby') { const v = num(el.value); if (v > 1920 && v < new Date().getFullYear() - 15) { await saveProfile({ birthYear: v }); saved(); } else toast('שנה לא נכונה'); }
     else if (el.id === 'sh') { const v = num(el.value); if (v > 120 && v < 220) { await saveProfile({ heightCm: v }); saved(); } else toast('גובה לא נכון'); }
     else if (el.id === 'smd') { await saveProfile({ measureDay: +el.value }); saved(); }
+    else if (el.id === 'savoid') {
+      const list = el.value.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+      await saveProfile({ avoid: list.length ? list : null }); saved();
+    }
     else if (el.id === 'sai') { await saveUi({ aiEnabled: el.checked }); toast(el.checked ? 'עזרה חכמה פועלת' : 'עזרה חכמה כבויה'); }
     else if (el.id === 'spush') {
       try {

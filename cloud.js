@@ -83,6 +83,47 @@
     if (!r.ok) throw new Error('backup ' + r.status);
     await root.saveUi({ lastCloudBackupAt: Date.now() });
   }
+  /* Every change, not once a day. backup() always sends the WHOLE export
+     (entries, foods, recipes, meals, weights, measurements, settings), so one
+     debounced call after she stops touching the screen is enough to make the
+     cloud copy complete. Cheap on the free plan: one KV write per burst. */
+  const QUIET_MS = 25000;      // coalesce a burst of edits into one upload
+  const MIN_GAP_MS = 120000;   // and never more than one upload every 2 minutes
+  let saveT = null, savePending = false, lastSaveAt = 0;
+  function save() {
+    if (!enabled() || !root.APP.ui.onboarded) return;
+    savePending = true;
+    const wait = Math.max(QUIET_MS, MIN_GAP_MS - (Date.now() - lastSaveAt));
+    clearTimeout(saveT);
+    saveT = setTimeout(flush, wait);
+  }
+  /* Closing the app bypasses the gap: her last edits go up now or never. */
+  async function flush() {
+    clearTimeout(saveT);
+    if (!savePending) return;
+    savePending = false;
+    try { await backup(true); lastSaveAt = Date.now(); } catch (_) { savePending = true; }
+  }
+
+  /* She should never be asked for a recovery code. The identity survives an
+     IndexedDB wipe through the localStorage mirror, so if the journal itself
+     is gone while the identity is intact, the newest cloud backup comes back
+     on its own. Runs before the app loads its library, and only ever when
+     there is nothing local to overwrite. */
+  async function autoRestore() {
+    const APP = root.APP;
+    if (!enabled() || !APP.ui.onboarded) return false;
+    const d = APP.device;
+    if (!d || !d.id || !d.secret || !d.registered) return false;
+    for (const s of ['entries', 'foods', 'weights', 'recipes', 'meals']) {
+      if (await root.DB.count(s).catch(() => 1)) return false;   // she has data: leave it alone
+    }
+    const data = await fetchBackup('TZ1.' + d.id + '.' + d.secret);
+    await root.DB.importAll(data);
+    await root.DB.saveSetting('device', d);                      // importAll clears the mirror
+    return true;
+  }
+
   async function fetchBackup(code) {
     const d = parseCode(code);
     const r = await fetch(url('/backup'), { headers: { Authorization: 'Bearer ' + d.id + '.' + d.secret } });
@@ -158,5 +199,10 @@
     await heartbeat(true).catch(() => {});
   }
 
-  root.Cloud = { enabled, authHeader, recoveryCode, backup, fetchBackup, adoptCode, pushSupported, subscribe, unsubscribe, heartbeat, onBoot };
+  /* Leaving the app is the last safe moment to get her changes out. */
+  root.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
+  root.addEventListener('pagehide', flush);
+
+  root.Cloud = { enabled, authHeader, recoveryCode, backup, save, flush, autoRestore, fetchBackup, adoptCode,
+    pushSupported, subscribe, unsubscribe, heartbeat, onBoot };
 })(window);
