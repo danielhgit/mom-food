@@ -379,35 +379,128 @@
       count.set(e.name, (count.get(e.name) || 0) + 1);
     }
     const proteinFood = [...count].sort((a, b) => b[1] - a[1]).map((x) => x[0])[0] || null;
+    // what makes tonight different from her usual evenings
+    const seen = new Set((recentEntries || []).filter((e) => e.date < date && e.date >= addDays(date, -14)).map((e) => e.name));
+    const newFoods = [...new Set(entries.map((e) => e.name))].filter((n) => !seen.has(n)).slice(0, 6);
+    const dinnerNow = meals.dinner.reduce((s, x) => s + x.kcal, 0);
+    let dinnerLightestIn = null;
+    if (dinnerNow > 0) {
+      let n = 0;
+      for (let i = 1; i <= 14; i++) {
+        const t = totalsMap.get(addDays(date, -i));
+        if (!t || !(t.slots.dinner > 0)) continue;
+        if (t.slots.dinner <= dinnerNow) break;
+        n = i;
+      }
+      if (n >= 3) dinnerLightestIn = n;
+    }
     return {
       meals,
       yesterday: y ? { kcal: Math.round(y.k), dinner: Math.round(y.slots.dinner) } : null,
       dinnerAvg14: dinners.length >= 3 ? Math.round(mean(dinners)) : null,
       breakfastDays14: past.filter((t) => t.slots.breakfast > 0).length,
-      proteinFood,
+      proteinFood, newFoods, dinnerLightestIn,
+      weekday: WEEKDAY_HE[parseYmd(date).getDay()],
     };
   }
+
+  const WEEKDAY_HE = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+  /* Days left to the next streak milestone (7, 30, 100), or null past 100. */
+  function toMilestone(streakDays) {
+    const n = [7, 30, 100].find((m) => m > streakDays);
+    return n ? n - streakDays : null;
+  }
+  /* Small stable hash so a day always gets the same pick (reopening the sheet
+     shows the same local note), but consecutive days differ. */
+  function hashStr(s) { let h = 2166136261; for (const ch of String(s)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; }
+
+  /* What the note looks at tonight. Only angles the day has material for, and
+     never the one used last time — the single biggest cause of "it always says
+     the same thing". */
+  function pickAngle({ date, meals, yesterday, dinnerAvg14, dinnerLightestIn, newFoods, streakDays, weekAvg, lastAngle }) {
+    const dinner = ((meals && meals.dinner) || []).reduce((s, x) => s + x.kcal, 0);
+    const ok = ['food', 'effort'];
+    if (dinner > 0 && (dinnerLightestIn || (dinnerAvg14 && dinner <= dinnerAvg14 * 0.9) || (yesterday && yesterday.dinner && dinner <= yesterday.dinner * 0.9))) ok.push('dinner');
+    if (streakDays >= 3) ok.push('streak');
+    if (weekAvg) ok.push('week');
+    if (newFoods && newFoods.length) ok.push('new');
+    const pool = ok.filter((a) => a !== lastAngle);
+    return pool[hashStr(date) % pool.length];
+  }
+
+  /* Warm lines for the evenings Gemini can't answer. Gemini refreshes a
+     personal bank about once a week (ui.cheerBank); this starter set covers
+     day one and a phone that never gets online. No numbers, no food offers. */
+  const STARTER_BANK = {
+    titles: [
+      'עוד יום יפה מאחורייך', 'סגרנו עוד יום', 'יום שלם בספר', 'ערב טוב וגאה', 'עוד צעד קטן קדימה',
+      'יום שנרשם עד הסוף', 'הנה עוד יום', 'ככה זה נראה', 'עוד דף במחברת', 'יום רגוע ויפה',
+      'היום עשית את זה', 'עוד ערב של התמדה', 'יום טוב נסגר', 'שקט של סוף יום', 'עוד יום שלך',
+      'לאט ובטוח', 'יום אחרי יום', 'ערב של סיפוק',
+    ],
+    lines: [
+      'מחר מחכה יום חדש, ואת כבר יודעת איך עושים את זה.',
+      'ככה בונים הרגל, ערב אחרי ערב.',
+      'את עושה את זה בשביל עצמך, וזה מורגש.',
+      'עוד ערב נרשם בשקט, בלי דרמות.',
+      'התמונה נבנית מהימים הרגילים, והיום היה אחד מהם.',
+      'לילה טוב, מחר ממשיכות מאותה נקודה.',
+      'אין צורך בשלמות, מספיק להמשיך לרשום.',
+      'כל יום רשום מלמד משהו על ההרגלים שלך.',
+      'עוד יום שבו בחרת לשים לב, וזה הרבה.',
+      'מחר עוד הזדמנות קטנה, בקצב שלך.',
+      'לאט לאט, וזה בדיוק הקצב הנכון.',
+      'יום אחרי יום, ככה זה עובד.',
+      'הערב אפשר לנוח, עשית את החלק שלך.',
+      'המחברת מתמלאת, ואיתה גם התמונה של ההרגלים.',
+      'עוד ערב שנסגר בשקט ובמודעות.',
+      'את מתמידה, וזה הדבר הכי חשוב כאן.',
+    ],
+  };
+  /* The first line in a day-shuffled order that was not shown recently; when
+     all were shown, start over. used = strings shown before (newest last). */
+  function pickFresh(list, used, seed) {
+    if (!list || !list.length) return null;
+    const n = list.length, start = hashStr(seed) % n, recent = new Set((used || []).slice(-Math.max(1, n - 1)));
+    for (let i = 0; i < n; i++) { const s = list[(start + i) % n]; if (!recent.has(s)) return s; }
+    return list[start];
+  }
+  const MILESTONE_TITLE = { 7: 'שבוע שלם ברצף', 30: 'חודש שלם ברצף', 100: 'מאה ימים ברצף' };
 
   /* Offline fallback for the coach note, in the same voice as the Gemini one:
      one specific good thing from today, one small idea for tomorrow. No numbers
      (they are on the screen above it), never "חרגת". */
-  function coachLocal({ protein, proteinGoal, streakDays, meals, yesterday, dinnerAvg14, proteinFood }) {
+  /* date picks among 2-3 phrasings per case, recent (earlier notes) are
+     skipped, and bankLine (from the Gemini bank) closes a day that has no
+     idea for tomorrow. Without date it behaves as before: first phrasing. */
+  function coachLocal({ protein, proteinGoal, streakDays, meals, yesterday, dinnerAvg14, proteinFood, newFoods, date, recent, bankLine }) {
     const m = meals || { breakfast: [], lunch: [], dinner: [], snack: [] };
     const total = (list) => list.reduce((s, x) => s + x.kcal, 0);
     const dinner = total(m.dinner);
     const lunchTop = [...m.lunch].sort((a, b) => b.protein - a.protein)[0];
-    let first;
-    if (dinner > 0 && dinnerAvg14 && dinner <= dinnerAvg14 * 0.85) first = 'ארוחת הערב הייתה קלה מהרגיל.';
-    else if (dinner > 0 && yesterday && yesterday.dinner && dinner <= yesterday.dinner * 0.85) first = 'ארוחת הערב הייתה קלה יותר מאתמול.';
-    else if (lunchTop && lunchTop.protein >= 20) first = `בצהריים היה חלבון טוב, עם ${lunchTop.name}.`;
-    else if (m.dinner.some((x) => x.name.includes('יין'))) first = 'רשמת גם את היין, ככה רואים את התמונה האמיתית.';
-    else if (dinner > 0 && !m.snack.length) first = 'היום עבר בלי נשנושים בין הארוחות.';
-    else first = 'רשמת את כל היום, וזה מה שעושה את ההבדל.';
-    let second;
-    if (proteinGoal && protein < proteinGoal * 0.8) second = `מחר אפשר להוסיף ${proteinFood || 'ביצה או דג'} לצהריים, זה מחזיק עד הערב.`;
-    else if (streakDays >= 3) second = 'עוד יום ברצף של רישום, ממשיכות ככה.';
-    else second = 'מחר ממשיכים באותה דרך.';
-    return first + ' ' + second;
+    const fresh = (newFoods || []).find((n) => n.length <= 25);
+    let firsts;
+    if (dinner > 0 && dinnerAvg14 && dinner <= dinnerAvg14 * 0.85) firsts = ['ארוחת הערב הייתה קלה מהרגיל.', 'הערב יצא קליל יותר מהערבים הרגילים שלך.', 'ערב קל מהרגיל, וזה בדיוק המקום שבו זה נחשב.'];
+    else if (dinner > 0 && yesterday && yesterday.dinner && dinner <= yesterday.dinner * 0.85) firsts = ['ארוחת הערב הייתה קלה יותר מאתמול.', 'הערב אכלת קל יותר מאתמול, בלי לוותר על ארוחה.'];
+    else if (lunchTop && lunchTop.protein >= 20) firsts = [`בצהריים היה חלבון טוב, עם ${lunchTop.name}.`, `בצהריים בחרת ב${lunchTop.name}, וזה חלבון טוב באמצע היום.`];
+    else if (m.dinner.some((x) => x.name.includes('יין'))) firsts = ['רשמת גם את היין, ככה רואים את התמונה האמיתית.', 'גם היין נכנס לרישום, וזה מה שהופך את התמונה לאמיתית.'];
+    else if (fresh) firsts = [`הופיע היום משהו חדש בצלחת: ${fresh}.`, `יש היום חידוש ברשימה שלך: ${fresh}.`];
+    else if (dinner > 0 && !m.snack.length) firsts = ['היום עבר בלי נשנושים בין הארוחות.', 'יום שלם בלי נשנושים בין הארוחות, יפה.'];
+    else firsts = ['רשמת את כל היום, וזה מה שעושה את ההבדל.', 'עוד יום שנרשם מההתחלה ועד הסוף.', 'היום כולו רשום, וזה הבסיס של הכול.'];
+    let seconds;
+    if (proteinGoal && protein < proteinGoal * 0.8) {
+      const f = proteinFood || 'ביצה או דג';
+      seconds = [`מחר אפשר להוסיף ${f} לצהריים, זה מחזיק עד הערב.`, `רעיון למחר: ${f} בצהריים, כדי שהערב יהיה רגוע יותר.`];
+    } else if (streakDays >= 3) seconds = ['עוד יום ברצף של רישום, ממשיכות ככה.', 'הרצף ממשיך להתארך, וזה שלך.'];
+    else seconds = ['מחר ממשיכים באותה דרך.', 'לילה טוב, מחר ממשיכות.'];
+    if (bankLine && !(proteinGoal && protein < proteinGoal * 0.8)) seconds = [bankLine, ...seconds];
+    const seen = recent || [];
+    const h = date ? hashStr(date) : 0;
+    const combos = [];
+    for (let i = 0; i < firsts.length; i++) for (let j = 0; j < seconds.length; j++) {
+      combos.push(firsts[(h + i) % firsts.length] + ' ' + seconds[bankLine ? j : (h + j) % seconds.length]);
+    }
+    return combos.find((c) => !seen.some((r) => r === c || r.startsWith(c.split('. ')[0]))) || combos.find((c) => !seen.includes(c)) || combos[0];
   }
 
   const api = {
@@ -419,6 +512,7 @@
     dayTotals, loggedSet, streak, weekAverage,
     avgWindow, kgNow, weightSeries, forecast, calibration,
     eveningCombos, wins, scaleNote, milestones, coachFacts, coachLocal,
+    pickAngle, toMilestone, pickFresh, STARTER_BANK, MILESTONE_TITLE, WEEKDAY_HE,
     AVOID_SEED, SAFE_PROTEIN, avoidsFood, suggestsAvoided,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

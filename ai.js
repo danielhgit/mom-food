@@ -27,7 +27,11 @@
       headers: { 'Content-Type': 'application/json', Authorization: auth },
       body: JSON.stringify({ kind, payload }),
     });
-    if (!res.ok) { const e = new Error('ai ' + res.status); e.status = res.status; throw e; }
+    if (!res.ok) {
+      const e = new Error('ai ' + res.status); e.status = res.status;
+      try { e.body = await res.json(); } catch (_) { /* no body */ }
+      throw e;
+    }
     return res.json();
   }
 
@@ -111,13 +115,36 @@
      again here: a note that names something she must not be offered is dropped
      and the app's own note is shown instead. Belt and braces, because the
      Worker may be an older deploy than the app. */
+  /* Returns {text, title} or throws with .why (what Settings reports:
+     quota, busy, rejected:..., offline...). An older Worker sends no title;
+     the app then takes one from the bank. */
   async function coach(summary) {
     const avoid = (root.APP.profile && root.APP.profile.avoid) || root.Calc.AVOID_SEED;
-    const r = await call('coach', { ...summary, avoid });
+    let r;
+    try { r = await call('coach', { ...summary, avoid }); } catch (e) { e.why = await whyOf(e); throw e; }
     const text = r && r.text ? String(r.text).trim() : null;
-    if (!text || root.Calc.suggestsAvoided(text, avoid)) return null;
-    return text;
+    if (!text) throw Object.assign(new Error('empty'), { why: 'empty' });
+    if (root.Calc.suggestsAvoided(text, avoid)) throw Object.assign(new Error('avoid'), { why: 'rejected:avoid' });
+    let title = r.title ? String(r.title).trim() : '';
+    if (title && root.Calc.avoidsFood(title, avoid)) title = '';
+    return { text, title };
+  }
+  async function whyOf(e) {
+    if (e.body && e.body.error) return String(e.body.error).slice(0, 40);
+    if (e.status) return 'http ' + e.status;
+    return 'network';
   }
 
-  root.AI = { enabled, configured, ensureReady, describe, plate, label, coach };
+  /* About once a week: a fresh batch of warm titles and closing lines.
+     Checked again here against her list. */
+  async function bank() {
+    const avoid = (root.APP.profile && root.APP.profile.avoid) || root.Calc.AVOID_SEED;
+    const r = await call('bank', { avoid });
+    const ok = (s) => typeof s === 'string' && s.trim() && !/[A-Za-z0-9!]/.test(s) && !root.Calc.avoidsFood(s, avoid);
+    const titles = (r.titles || []).filter(ok), lines = (r.lines || []).filter(ok);
+    if (titles.length < 6 || lines.length < 6) throw new Error('thin bank');
+    return { titles, lines };
+  }
+
+  root.AI = { enabled, configured, ensureReady, describe, plate, label, coach, bank };
 })(window);

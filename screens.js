@@ -175,7 +175,7 @@ async function viewDay(date) {
   if (isToday && entries.length && !closed) {
     html += `<button class="btn block ghost" data-act="close" style="margin-top:4px">${icon('moon')}סיימתי את היום</button>`;
   } else if (closed) {
-    html += `<div class="card good"><h3 class="row">${icon('check')}${isToday ? 'היום סגור' : 'היום נסגר'}</h3>
+    html += `<div class="card good"><h3 class="row">${icon('check')}${dayRec.coachTitle ? esc(dayRec.coachTitle) : isToday ? 'היום סגור' : 'היום נסגר'}</h3>
       ${dayRec.coachNote ? `<p class="note" style="color:var(--text)">${esc(dayRec.coachNote)}</p>` : ''}
       ${isToday ? `<button class="linkbtn" data-act="reopen">לפתוח מחדש</button>` : ''}</div>`;
   }
@@ -329,10 +329,22 @@ function openCloseDay(ctx, date, entries) {
   const avg7 = C.avgWindow(ctx.weights, ctx.t, 7) ?? ctx.kg;
   const avoid = APP.profile.avoid || C.AVOID_SEED;
   const facts = C.coachFacts(entries, ctx.totals, date, ctx.recent.filter((e) => e.date >= C.addDays(date, -30)), avoid);
-  let note = C.coachLocal({ protein: tot.p, proteinGoal: ctx.pGoal, streakDays, ...facts });
+  const before = ctx.days.filter((d) => d.coachNote && d.date < date).sort((a, b) => (a.date < b.date ? 1 : -1));
+  const recent = before.slice(0, 7).map((d) => d.coachNote);
+  const recentTitles = before.slice(0, 7).map((d) => d.coachTitle).filter(Boolean);
+  const angle = C.pickAngle({ date, ...facts, streakDays, weekAvg: weekAvg && weekAvg.avg, lastAngle: before[0] && before[0].coachAngle });
+  // the evening's fallback words: Gemini's weekly bank when there is one, else the built-in lines
+  const bankSrc = APP.ui.cheerBank && APP.ui.cheerBank.titles ? APP.ui.cheerBank : C.STARTER_BANK;
+  const used = APP.ui.cheerUsed || [];
+  const bankLine = C.pickFresh(bankSrc.lines, used, date + 'l');
+  let title = C.pickFresh(bankSrc.titles, used, date + 't');
+  let note = C.coachLocal({ protein: tot.p, proteinGoal: ctx.pGoal, streakDays, ...facts, date, recent, bankLine });
+  let src = 'local', why = null;
   // Gemini writes the note when it can. Until it answers (or gives up) the card shows
   // a quiet placeholder, so the text never changes in front of her.
-  const askAi = !!(window.AI && AI.enabled() && APP.ui.aiEnabled !== false && online());
+  const aiOn = !!(window.AI && AI.enabled() && APP.ui.aiEnabled !== false);
+  const askAi = aiOn && online();
+  if (!askAi) why = !(window.AI && AI.configured()) ? 'none' : APP.ui.aiEnabled === false ? 'off' : !online() ? 'offline' : 'notready';
   // only for a fully logged day: a half-logged 900 kcal day would promise a fantasy
   const forecast = entries.length >= 3 && tot.k >= ctx.target * 0.8 && tot.k < tdee ? C.forecast(avg7, tdee, tot.k) : null;
   const showForecast = forecast != null && forecast < avg7;
@@ -348,34 +360,60 @@ function openCloseDay(ctx, date, entries) {
       <p id="coach" class="coach${askAi ? ' wait' : ''}">${askAi ? '<span class="skl"></span><span class="skl short"></span>' : esc(note)}</p>
     </div>
     <button class="btn block goodbtn" data-act="close">${icon('check')}לסגור את היום</button>`);
+  let settle;
+  const settled = new Promise((r) => { settle = r; });
   if (askAi) {
-    const show = (txt) => {
+    const show = (res, err) => {
       const el = $('#coach');
-      if (!el || !el.classList.contains('wait')) return;
-      if (txt) note = txt;
+      if (settle === null) return;
+      if (res) { note = res.text; if (res.title) title = res.title; src = 'ai'; why = null; }
+      else why = (err && err.why) || 'timeout';
+      settle(); settle = null;
+      if (!el) return;
       el.classList.remove('wait');
       el.textContent = note;
     };
     const prevAvg = C.avgWindow(ctx.weights, C.addDays(ctx.t, -7), 7);
-    const recent = ctx.days.filter((d) => d.coachNote && d.date < date).sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 3).map((d) => d.coachNote);
     AI.coach({ kind: 'day', kcal: tot.k, target: ctx.target, protein: tot.p, proteinGoal: ctx.pGoal,
-      weekAvg: weekAvg && weekAvg.avg, streak: streakDays,
+      weekAvg: weekAvg && weekAvg.avg, streak: streakDays, toMilestone: C.toMilestone(streakDays),
       weightTrend: prevAvg != null && avg7 != null ? C.r1(avg7 - prevAvg) : null,
       slots: C.dayTotals(entries).get(date)?.slots,
       meals: facts.meals, yesterday: facts.yesterday, dinnerAvg14: facts.dinnerAvg14,
-      breakfastDays14: facts.breakfastDays14, recent,
-    }).then(show, () => show(null));
-    setTimeout(() => show(null), 12000);
-  }
+      breakfastDays14: facts.breakfastDays14, dinnerLightestIn: facts.dinnerLightestIn, newFoods: facts.newFoods,
+      weekday: facts.weekday, angle, recent, recentTitles,
+    }).then((r) => show(r), (e) => show(null, e)).then(refreshBank);
+    // Gemini may retry a busy model and fall back to a second one; 20 s covers that
+    setTimeout(() => show(null, { why: 'timeout' }), 20000);
+  } else { settle(); settle = null; }
   body.onclick = async (ev) => {
-    if (!ev.target.closest('[data-act="close"]')) return;
-    await DB.put('days', { date, closed: true, closedAt: Date.now(), coachNote: note });
+    const btn = ev.target.closest('[data-act="close"]');
+    if (!btn || btn.disabled) return;
+    // tapped before the note arrived: wait for it rather than save words she never saw
+    btn.disabled = true;
+    if (settle) { btn.innerHTML = 'רגע…'; await settled; }
+    await DB.put('days', { date, closed: true, closedAt: Date.now(), coachNote: note, coachTitle: title,
+      coachSrc: src, coachWhy: why, coachAngle: angle });
+    await saveUi({ cheerUsed: [...used, title, bankLine].filter(Boolean).slice(-80) });
     afterDataChange(date);
     if (window.Cloud && Cloud.enabled()) Cloud.backup(true).catch(() => {});
     closeModal(); vibrate([20, 40, 20]);
-    toast('לילה טוב. היום נשמר');
+    celebrate({ title: C.MILESTONE_TITLE[streakDays] || title, badge: C.MILESTONE_TITLE[streakDays] ? '' : (streakDays >= 3 ? `${streakDays} ימים ברצף` : ''), note });
     rerender();
   };
+}
+
+/* Gemini's weekly bank of warm lines for the evenings it can't answer. Asked
+   right after the day's note settles (never alongside it), at most once a week. */
+async function refreshBank() {
+  const bank = APP.ui.cheerBank;
+  if (!(window.AI && AI.enabled() && APP.ui.aiEnabled !== false && online())) return;
+  if (bank && bank.at && Date.now() - bank.at < 7 * 864e5) return;
+  if (APP.ui.cheerBankTry && Date.now() - APP.ui.cheerBankTry < 864e5) return;   // one failed try a day at most
+  await saveUi({ cheerBankTry: Date.now() });
+  try {
+    const r = await AI.bank();
+    await saveUi({ cheerBank: { at: Date.now(), ...r } });
+  } catch (_) { /* the built-in lines keep working */ }
 }
 
 /* ================= add ================= */
@@ -1235,6 +1273,14 @@ async function viewSettings() {
   const target = C.targetFor(p, kg, t);
   const aiAvail = !!(window.AI && AI.enabled());
   const pushAvail = !!(window.Cloud && Cloud.enabled() && Cloud.pushSupported());
+  // For Daniel: did Gemini actually write the last notes, and if not, why
+  const closes = (await DB.all('days')).filter((d) => d.closed && d.coachSrc).sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 7);
+  const aiNotes = closes.filter((d) => d.coachSrc === 'ai').length;
+  const WHY = { quota: 'נגמרה המכסה היומית של Google', busy: 'השרת של Google היה עמוס', timeout: 'התשובה לקחה יותר מדי זמן',
+    offline: 'לא היה אינטרנט', off: 'העזרה החכמה כבויה', notready: 'השרת לא אישר שיש מפתח', none: 'אין שרת', network: 'בעיית רשת' };
+  const whyCode = (closes.find((d) => d.coachSrc !== 'ai') || {}).coachWhy;
+  const lastWhy = whyCode && (WHY[whyCode] || (whyCode.startsWith('rejected') ? 'התשובה נפסלה בבדיקה' : whyCode));
+  const noteLine = closes.length ? `<div class="faint" id="coachstat" style="margin:-2px 0 8px 34px">מתוך ${closes.length} הסגירות האחרונות, ${aiNotes === closes.length ? 'כולן נכתבו' : aiNotes + ' נכתבו'} בעזרה החכמה${aiNotes < closes.length && lastWhy ? `. בפעם האחרונה שלא: ${esc(lastWhy)}` : ''}.</div>` : '';
   setView(`
     <div class="card gold"><h3>היעד שלך</h3>
       <div class="kv"><span>הגוף שורף במנוחה</span><b class="n">${fmt(bmr)}</b></div>
@@ -1264,7 +1310,7 @@ async function viewSettings() {
       <div class="seg">${[['m', 'רגיל'], ['l', 'גדול'], ['xl', 'ענק']].map(([v, l]) => `<button class="${(p.textSize || 'm') === v ? 'on' : ''}" data-act="text" data-v="${v}">${l}</button>`).join('')}</div></div>
 
     ${aiAvail || pushAvail ? `<div class="card"><h3>תוספות</h3>
-      ${aiAvail ? `<label class="row" style="min-height:52px"><input type="checkbox" id="sai" ${APP.ui.aiEnabled !== false ? 'checked' : ''} style="width:24px;height:24px"><span class="grow"><b>עזרה חכמה</b><br><span class="faint">צילום צלחת, קריאת תוויות והבנת טקסט. התמונות והטקסט נשלחים ל-Google לעיבוד.</span></span></label>` : ''}
+      ${aiAvail ? `<label class="row" style="min-height:52px"><input type="checkbox" id="sai" ${APP.ui.aiEnabled !== false ? 'checked' : ''} style="width:24px;height:24px"><span class="grow"><b>עזרה חכמה</b><br><span class="faint">צילום צלחת, קריאת תוויות והבנת טקסט. התמונות והטקסט נשלחים ל-Google לעיבוד.</span></span></label>${noteLine}` : ''}
       ${pushAvail ? `<label class="row" style="min-height:52px"><input type="checkbox" id="spush" ${APP.ui.pushEnabled ? 'checked' : ''} style="width:24px;height:24px"><span class="grow"><b>תזכורות</b><br><span class="faint">בערב, רק אם עוד לא רשמת ארוחת ערב. ובבוקר של יום המדידה.</span></span></label>` : ''}
     </div>` : ''}
     <div class="card"><h3>מאכלים שלא להציע</h3>

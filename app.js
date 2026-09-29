@@ -79,6 +79,48 @@ function toast(msg, action) {
 }
 function hideToast() { if (window.Tour && Tour.holdsToast()) return; $('#toast').classList.remove('show'); }
 
+/* ---------------- day-close celebration ----------------
+   Two party horns, a short confetti fall, the evening's title and note, and
+   one button. No sound (Daniel's call). Static under reduced motion. */
+const HORN = `<svg viewBox="0 0 64 64" aria-hidden="true"><g class="blow">
+  <path d="M6 58 L30 26 L40 36 Z" fill="#e9b949"/>
+  <path d="M18 42 L23 47 M24 34 L31.5 41.5" stroke="#1f5a48" stroke-width="3.2" stroke-linecap="round"/>
+  <ellipse cx="35" cy="31" rx="3.2" ry="7.4" transform="rotate(45 35 31)" fill="#c9941a"/></g>
+  <g class="blast" stroke="#2f8068" stroke-width="3" stroke-linecap="round">
+  <path d="M43 23 L51 15"/><path d="M47 31 L57 29"/><path d="M36 19 L37 9"/></g></svg>`;
+function celebrate({ title, note, badge }) {
+  closeCelebrate();
+  const colors = ['#1f5a48', '#2f8068', '#e9b949', '#b98a14', '#8cc9a8', '#e08a4a'];
+  let bits = '';
+  for (let i = 0; i < 60; i++) {
+    const w = 6 + (i * 7) % 7, h = i % 3 ? w * 1.8 : w;
+    bits += `<i style="left:${(i * 37) % 100}%;width:${w}px;height:${h}px;background:${colors[i % colors.length]};`
+      + `animation-delay:${((i * 13) % 20) / 20}s;animation-duration:${2.4 + ((i * 11) % 14) / 10}s;--r:${(i * 97) % 720 - 360}deg;${i % 4 === 0 ? 'border-radius:50%;' : ''}"></i>`;
+  }
+  const el = document.createElement('div');
+  el.id = 'party';
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-modal', 'true');
+  el.setAttribute('aria-label', title || 'היום נסגר');
+  el.innerHTML = `<div class="confetti">${bits}</div>
+    <div class="pcard">
+      <div class="horns"><span class="horn l">${HORN}</span><span class="horn r">${HORN}</span></div>
+      ${badge ? `<div class="pill gold pbadge">${icon('trophy', 'sm')}${esc(badge)}</div>` : ''}
+      <h2>${esc(title || 'עוד יום יפה מאחורייך')}</h2>
+      <p>${esc(note || '')}</p>
+      <button class="btn block goodbtn" data-act="night">${icon('moon')}לילה טוב</button>
+    </div>`;
+  el.onclick = (ev) => { if (ev.target.closest('[data-act="night"]') || ev.target === el) closeCelebrate(); };
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  window.addEventListener('hashchange', closeCelebrate, { once: true });
+  setTimeout(() => { const b = el.querySelector('[data-act="night"]'); if (b) b.focus({ preventScroll: true }); }, 50);
+}
+function closeCelebrate() {
+  const el = $('#party');
+  if (el) el.remove();
+}
+
 /* ---------------- bottom sheet ----------------
    Opening pushes one history entry so the Android back button closes the
    sheet instead of leaving the screen. Chained sheets replace content. */

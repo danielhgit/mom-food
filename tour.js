@@ -100,8 +100,11 @@
       steps: [
         { route: '#/', el: '#view [data-act="close"]', missing: 'הכפתור לסגירת היום מופיע אחרי שרושמים משהו, וכל עוד היום פתוח.',
           text: 'בסוף היום, אחרי הארוחה האחרונה, לוחצים כאן.', wait: 'tap' },
-        { el: '#modalbody .daynote', text: 'כאן יש סיכום קצר של היום ומילה טובה.', wait: 'next' },
-        { el: '#modalbody [data-act="close"]', text: 'לוחצים כאן כדי לסגור את היום. אם עוד לא סיימת לאכול, סוגרים את החלון וחוזרים בערב.', wait: 'next' },
+        { el: '#modalbody .daynote', text: 'כאן יש סיכום קצר של היום, ומילה טובה שנכתבת במיוחד על היום שלך.', wait: 'next' },
+        { el: '#modalbody [data-act="close"]', text: 'לוחצים כאן כדי לסגור את היום. אם עוד לא סיימת לאכול, לוחצים "הבנתי, הלאה" וחוזרים בערב.', wait: 'either' },
+        // only when she really closed the day; the button stays disabled while it saves
+        { el: '#party .pcard', skipIf: () => !$('#party') && !$('#modalbody [data-act="close"][disabled]'), waitMs: 25000,
+          text: 'וזו החגיגה של סוף היום. לוחצים "לילה טוב" וזהו.', wait: 'next' },
         { done: 'זהו. יום שנגמר מעל היעד זה בסדר, מה שקובע הוא הממוצע של השבוע.' },
       ],
     },
