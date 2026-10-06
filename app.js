@@ -28,6 +28,41 @@ function dot(k100, liquid) { return `<span class="dot ${C.density(k100, liquid)}
 function num(v) { const x = parseFloat(String(v ?? '').replace(',', '.')); return isFinite(x) ? x : null; }
 function vibrate(ms = 12) { try { navigator.vibrate && navigator.vibrate(ms); } catch (_) {} }
 function online() { return navigator.onLine !== false; }
+function reducedMotion() { return !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches); }
+/* One spring, in Apple's two terms: damping (1 = settles without overshoot,
+   lower = a little bounce) and response (seconds to get there; not a fixed
+   duration). s = {x, v, raf}: it always starts from where the thing is and
+   how fast it is moving, so motion can be grabbed and turned around mid-way. */
+function spring(s, to, { damping = 1, response = 0.35, velocity, onUpdate, onDone } = {}) {
+  cancelAnimationFrame(s.raf);
+  s.to = to;
+  if (velocity != null) s.v = velocity;
+  const k = (2 * Math.PI / response) ** 2, c = 4 * Math.PI * damping / response;
+  let last = performance.now();
+  const step = (now) => {
+    let dt = Math.min(0.064, Math.max(0, now - last) / 1000);
+    last = now;
+    while (dt > 0) {
+      const h = Math.min(dt, 1 / 240);
+      s.v += (-k * (s.x - s.to) - c * s.v) * h;
+      s.x += s.v * h;
+      dt -= h;
+    }
+    if (Math.abs(s.x - s.to) < 0.5 && Math.abs(s.v) < 10) {
+      s.x = s.to; s.v = 0; s.raf = 0;
+      onUpdate(s.x);
+      if (onDone) onDone();
+      return;
+    }
+    onUpdate(s.x);
+    s.raf = requestAnimationFrame(step);
+  };
+  s.raf = requestAnimationFrame(step);
+}
+/* iOS only applies :active (the press feedback) when a touch listener exists. */
+document.addEventListener('touchstart', () => {}, { passive: true });
+/* The line under the title appears only once the page is scrolled under it. */
+window.addEventListener('scroll', () => document.body.classList.toggle('scrolled', window.scrollY > 4), { passive: true });
 function fmtDateShort(d) { return d.slice(8, 10) + '.' + d.slice(5, 7); }
 function fmtDateLong(d) { return 'יום ' + DAY_FULL[C.parseYmd(d).getDay()] + ', ' + fmtDateShort(d); }
 function relDay(d) {
@@ -51,7 +86,10 @@ function amountLabel(e) {
   return `${fmt(e.grams)} ${e.liquid ? 'מ״ל' : 'גרם'}`;
 }
 function setTitle(t) { $('#title').textContent = t; document.title = t === 'צלחת' ? 'צלחת' : t + ' · צלחת'; }
-function setView(html) { VIEW.innerHTML = `<div class="vwrap">${html}</div>`; }
+/* A re-render after an edit (route(true)) keeps the screen still; only real
+   navigation plays the entry fade. */
+let quietView = false;
+function setView(html) { VIEW.innerHTML = `<div class="vwrap${quietView ? ' still' : ''}">${html}</div>`; }
 function setTopAction(iconName, label, fn) {
   const b = $('#topaction');
   if (!iconName) { b.hidden = true; b.onclick = null; return; }
@@ -89,7 +127,7 @@ const HORN = `<svg viewBox="0 0 64 64" aria-hidden="true"><g class="blow">
   <g class="blast" stroke="#2f8068" stroke-width="3" stroke-linecap="round">
   <path d="M43 23 L51 15"/><path d="M47 31 L57 29"/><path d="M36 19 L37 9"/></g></svg>`;
 function celebrate({ title, note, badge }) {
-  closeCelebrate();
+  closeCelebrate(true);
   const colors = ['#1f5a48', '#2f8068', '#e9b949', '#b98a14', '#8cc9a8', '#e08a4a'];
   let bits = '';
   for (let i = 0; i < 60; i++) {
@@ -116,9 +154,15 @@ function celebrate({ title, note, badge }) {
   window.addEventListener('hashchange', closeCelebrate, { once: true });
   setTimeout(() => { const b = el.querySelector('[data-act="night"]'); if (b) b.focus({ preventScroll: true }); }, 50);
 }
-function closeCelebrate() {
+/* Fades out the way it faded in; now=true removes it at once (a new one is
+   about to take its place). */
+function closeCelebrate(now) {
   const el = $('#party');
-  if (el) el.remove();
+  if (!el) return;
+  if (now === true) { el.remove(); return; }
+  el.classList.remove('show');
+  el.style.pointerEvents = 'none';
+  setTimeout(() => el.remove(), 260);
 }
 
 /* ---------------- bottom sheet ----------------
@@ -132,6 +176,38 @@ function go(hash) {
   if (backDone) backDone.then(() => { location.hash = hash; });
   else location.hash = hash;
 }
+/* The sheet moves on a spring (sheet.x = px below its resting place, 0 = open).
+   Closing removes .show at once, so the app and tour.js see it closed, and
+   .closing keeps it on screen while it slides away; the content is cleared
+   only when it is out of sight. Opening again mid-slide turns it around from
+   wherever it is. Under reduced motion it fades instead of sliding. */
+const sheet = { x: 0, v: 0, raf: 0, h: 0, fadeT: 0 };
+function sheetPaint(y) {
+  const p = $('#modalbody');
+  p.style.transform = y ? `translateY(${y.toFixed(1)}px)` : '';
+  $('#modal').style.setProperty('--dim', Math.max(0, Math.min(1, 1 - y / (sheet.h || 1))).toFixed(3));
+}
+function sheetTo(y, opts = {}) {
+  const m = $('#modal');
+  clearTimeout(sheet.fadeT);
+  if (reducedMotion()) {
+    cancelAnimationFrame(sheet.raf); sheet.raf = 0; sheet.x = y; sheet.v = 0;
+    if (!y) { $('#modalbody').style.transform = ''; m.style.setProperty('--dim', '1'); }
+    m.style.transition = 'opacity .2s ease';
+    m.style.opacity = y ? '0' : '1';
+    sheet.fadeT = setTimeout(() => { m.style.transition = ''; if (opts.onDone) opts.onDone(); }, y ? 200 : 210);
+    return;
+  }
+  m.style.transition = ''; m.style.opacity = '';
+  spring(sheet, y, { ...opts, onUpdate: sheetPaint });
+}
+function sheetGone() {
+  const m = $('#modal'), body = $('#modalbody');
+  if (!m.classList.contains('closing')) return;
+  m.classList.remove('closing');
+  body.innerHTML = ''; body.inert = false; body.style.transform = '';
+  m.style.removeProperty('--dim'); m.style.opacity = '';
+}
 function modalOpen() { return $('#modal').classList.contains('show'); }
 function openModal(html, onClose) {
   const m = $('#modal');
@@ -140,7 +216,15 @@ function openModal(html, onClose) {
   body.onclick = null; body.oninput = null; body.onchange = null;
   body.scrollTop = 0;
   if (!modalOpen()) {
+    const sliding = m.classList.contains('closing');
+    m.classList.remove('closing'); body.inert = false;
     m.classList.add('show');
+    if (!sliding) {                       // from nothing: start just below the screen edge
+      sheet.h = body.offsetHeight; sheet.x = sheet.h; sheet.v = 0;
+      if (reducedMotion()) { m.style.opacity = '0'; m.style.setProperty('--dim', '1'); void m.offsetWidth; }
+      else sheetPaint(sheet.x);
+    }
+    sheetTo(0, { damping: 1, response: 0.35 });
     history.pushState({ sheet: 1 }, '');
     modalPushed = true;
   }
@@ -149,9 +233,13 @@ function openModal(html, onClose) {
 }
 function closeModal(silent) {
   if (!modalOpen()) return;
-  $('#modal').classList.remove('show');
+  const m = $('#modal'), body = $('#modalbody');
+  m.classList.remove('show'); m.classList.add('closing');
   stopCamera();
-  $('#modalbody').innerHTML = '';
+  body.inert = true; body.onclick = null; body.oninput = null; body.onchange = null;
+  body.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));   // the next screen owns its ids
+  sheet.h = Math.max(body.offsetHeight, sheet.x + 1);
+  sheetTo(sheet.h + 24, { damping: 1, response: 0.3, onDone: sheetGone });   // keeps a flick's speed (sheet.v)
   const f = modalOnClose; modalOnClose = null;
   if (modalPushed && !silent) {
     ignorePop = true;
@@ -171,6 +259,75 @@ window.addEventListener('popstate', () => {
   }
   if (modalOpen()) { modalPushed = false; closeModal(true); }
 });
+
+/* Pull the sheet down to close it. It starts from the grab bar, or from
+   anywhere once the sheet is scrolled to its top; pulling up, sideways (chips)
+   or inside a field stays a normal scroll or edit. The first downward move is
+   claimed right away (otherwise the browser starts its own scroll and keeps
+   it), and the sheet follows after 10px, glued to the finger. On release the
+   finger's speed is projected forward, the way a flick keeps going: past
+   about a third of the sheet it closes, otherwise it springs back, at the
+   finger's speed in both cases. Touch events give the implicit capture we
+   need (the touch stays with the sheet even when the finger leaves it). */
+(function sheetDrag() {
+  const p = $('#modalbody');
+  const project = (v, rate = 0.995) => (v / 1000) * rate / (1 - rate);
+  const rubberband = (over, dim, c = 0.55) => (over * dim * c) / (dim + c * Math.abs(over));
+  let d = null;
+  p.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) { end(); return; }   // a second finger ends the pull cleanly
+    d = null;
+    if (!modalOpen()) return;
+    if (window.Tour && Tour.active()) return;   // a guided tour is pointing at a button in this sheet
+    const grab = !!e.target.closest('.grab');
+    if (!grab && e.target.closest('input,textarea,select,video')) return;
+    const t = e.touches[0];
+    d = { x0: t.clientX, y0: t.clientY, grab, live: false, claimed: false, hist: [] };
+  }, { passive: true });
+  p.addEventListener('touchmove', (e) => {
+    if (!d) return;
+    if (e.touches.length !== 1 || !modalOpen()) { end(); return; }   // second finger, or the app closed it
+    const t = e.touches[0];
+    const dx = t.clientX - d.x0, dy = t.clientY - d.y0;
+    if (!d.claimed) {
+      if (!dx && !dy) return;
+      // only a downward pull at the top belongs to the sheet
+      if (Math.abs(dx) > Math.abs(dy) || dy < 0 || (!d.grab && p.scrollTop > 0)) { d = null; return; }
+      d.claimed = true;
+    }
+    if (e.cancelable) e.preventDefault();
+    if (!d.live) {
+      if (dy < 10) return;
+      d.live = true; d.y0 = t.clientY;
+      cancelAnimationFrame(sheet.raf); sheet.raf = 0; sheet.v = 0;
+      sheet.h = p.offsetHeight; d.from = sheet.x;
+      p.classList.add('dragging');
+    }
+    let y = d.from + (t.clientY - d.y0);
+    if (y < 0) y = -rubberband(-y, sheet.h);
+    sheet.x = y; sheetPaint(y);
+    d.hist.push([e.timeStamp, t.clientY]);
+    if (d.hist.length > 8) d.hist.shift();
+  }, { passive: false });
+  function end() {
+    if (!d) return;
+    const g = d; d = null;
+    if (!g.live) return;
+    p.classList.remove('dragging');
+    // speed over the last ~100ms of the pull, in px/s
+    let v = 0;
+    const last = g.hist[g.hist.length - 1];
+    const first = last && (g.hist.find((h) => last[0] - h[0] <= 100) || last);
+    if (last && last[0] > first[0]) v = (last[1] - first[1]) / ((last[0] - first[0]) / 1000);
+    sheet.v = v;
+    const land = sheet.x + project(v);
+    if (!modalOpen()) sheetTo(sheet.h + 24, { onDone: sheetGone });   // closed by the app mid-pull: finish leaving
+    else if (v > -100 && land > Math.min(sheet.h * 0.35, 200)) closeModal();   // continues at sheet.v
+    else sheetTo(0, { damping: 0.8, response: 0.35, velocity: v });
+  }
+  p.addEventListener('touchend', end);
+  p.addEventListener('touchcancel', end);
+})();
 
 /* ================= settings ================= */
 async function saveUi(patch) { APP.ui = { ...APP.ui, ...patch }; await DB.saveSetting('ui', APP.ui); }
@@ -383,6 +540,7 @@ async function route(keepScroll) {
   setTopAction(null);
   $('#helpbtn').hidden = !(window.Tour && Tour.forRoute(r).length) || !APP.ui.onboarded;
   VIEW.onclick = null; VIEW.oninput = null; VIEW.onchange = null;
+  quietView = !!keepScroll;
   if (!keepScroll) setView('<div class="sk"></div><div class="sk" style="height:80px"></div><div class="sk" style="height:200px"></div>');
   renderBasket();
   try {
@@ -1042,9 +1200,21 @@ async function renderBasket() {
   const bar = $('#basketbar');
   const r = parseHash().parts[0] || '';
   const show = APP.basket.length > 0 && !$('#nav').hidden && ['', 'add', 'day'].includes(r);
-  bar.hidden = !show;
-  document.body.classList.toggle('has-basket', show);
-  if (!show) return;
+  // rises from the bottom edge when it appears and sinks back the same way
+  const was = !bar.hidden && !bar.classList.contains('sink');
+  clearTimeout(bar.sinkT);
+  bar.classList.remove('sink');
+  if (!show) {
+    if (was && !reducedMotion()) {
+      bar.classList.add('sink');
+      bar.sinkT = setTimeout(() => { bar.classList.remove('sink'); bar.hidden = true; }, 220);
+    } else bar.hidden = true;
+    document.body.classList.remove('has-basket');
+    return;
+  }
+  bar.hidden = false;
+  bar.classList.toggle('rise', !was);
+  document.body.classList.add('has-basket');
   const items = APP.basket.map((x) => ({ food: APP.libById.get(x.foodId), ...x })).filter((x) => x.food);
   const kc = items.reduce((a, x) => a + C.nutrition(x.food.per100, x.grams).k, 0);
   const eaten = C.sum(await DB.byIndex('entries', 'date', today())).k;

@@ -8,7 +8,10 @@
 (function (root) {
   const $ = (s) => document.querySelector(s);
   const first = (sel) => {
-    for (const el of document.querySelectorAll(sel)) { const r = el.getBoundingClientRect(); if (r.width && r.height) return el; }
+    for (const el of document.querySelectorAll(sel)) {
+      if (el.closest('#modal.closing')) continue;   // a sheet sliding away is already gone for her
+      const r = el.getBoundingClientRect(); if (r.width && r.height) return el;
+    }
     return null;
   };
   const onAdd = () => (location.hash || '').startsWith('#/add');
@@ -160,7 +163,7 @@
 
   function resolve(step) {
     const el = typeof step.el === 'function' ? step.el() : first(step.el);
-    return el && el.isConnected ? el : null;
+    return el && el.isConnected && !el.closest('#modal.closing') ? el : null;
   }
 
   function show(step, el) {

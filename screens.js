@@ -47,8 +47,34 @@ function ringSvg(pct, color) {
   const r = 62, c = 2 * Math.PI * r, p = Math.min(1, Math.max(0, pct));
   return `<svg viewBox="0 0 150 150" aria-hidden="true">
     <circle cx="75" cy="75" r="${r}" fill="none" stroke="var(--inset)" stroke-width="13"/>
-    ${p > 0 ? `<circle cx="75" cy="75" r="${r}" fill="none" stroke="${color}" stroke-width="13" stroke-linecap="round" stroke-dasharray="${(c * p).toFixed(1)} ${c.toFixed(1)}"/>` : ''}
+    ${p > 0 ? `<circle class="arc" cx="75" cy="75" r="${r}" fill="none" stroke="${color}" stroke-width="13" stroke-linecap="round" stroke-dasharray="${(c * p).toFixed(1)} ${c.toFixed(1)}"/>` : ''}
   </svg>`;
+}
+/* After she logs something, the ring and the protein bar grow from what they
+   showed before to the new value, so she sees what the food added. The first
+   look at a day is drawn still, and so is everything under reduced motion. */
+let lastMeters = null;
+function growMeters(date, ring, prot) {
+  const before = lastMeters && lastMeters.date === date ? lastMeters : null;
+  lastMeters = { date, ring, prot };
+  if (!before || reducedMotion()) return;
+  const ease = 'cubic-bezier(.2,.8,.2,1)';
+  const arc = VIEW.querySelector('.hero .ring .arc');
+  if (arc && before.ring !== ring) {
+    const c = 2 * Math.PI * 62, to = arc.getAttribute('stroke-dasharray');
+    arc.setAttribute('stroke-dasharray', `${(c * Math.min(1, Math.max(0, before.ring))).toFixed(1)} ${c.toFixed(1)}`);
+    void arc.getBoundingClientRect();
+    arc.style.transition = `stroke-dasharray .6s ${ease}`;
+    arc.setAttribute('stroke-dasharray', to);
+  }
+  const bar = VIEW.querySelector('.hero .bar > div');
+  if (bar && before.prot !== prot) {
+    const to = bar.style.width;
+    bar.style.width = Math.min(100, before.prot * 100) + '%';
+    void bar.offsetWidth;
+    bar.style.transition = `width .6s ${ease}`;
+    bar.style.width = to;
+  }
 }
 /* The input lives in the page while the camera is open: on Android the camera
    is a separate app, and a detached input can be garbage-collected before the
@@ -183,6 +209,7 @@ async function viewDay(date) {
     html += `<button class="btn block ghost" data-act="copyday" style="margin-top:4px">${icon('copy')}להעתיק את כל היום להיום</button>`;
   }
   setView(html);
+  growMeters(date, pct, tot.p / ctx.pGoal);
 
   /* --- evening suggestions --- */
   let combos = [];
