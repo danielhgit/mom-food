@@ -1274,6 +1274,16 @@ function registerSW() {
   if (!('serviceWorker' in navigator)) return;
   const hadController = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.register('sw.js').catch(() => {});
+  /* Android keeps the app alive in the background, and the browser only looks
+     for a new version when the page is opened from scratch. On 14.10 she closed
+     her day seven minutes after a deploy and still got the old note. So: look
+     again whenever she comes back to the app, at most every 10 minutes. */
+  let lastCheck = Date.now();
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden || Date.now() - lastCheck < 6e5) return;
+    lastCheck = Date.now();
+    navigator.serviceWorker.getRegistration().then((r) => r && r.update()).catch(() => {});
+  });
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!hadController) return;
     const go = () => { sessionStorage.setItem('mf.updated', '1'); location.reload(); };
