@@ -216,7 +216,9 @@
     const out = [];
     const a0 = avgWindow(weights, today, 7);
     const a7 = avgWindow(weights, addDays(today, -7), 7);
-    if (a0 != null && a7 != null && a7 - a0 >= 0.1) {
+    // a 0.1-0.3 kg dip is "the scale stands" in progressNote; don't also call it a win on the same screen
+    const flatNote = progressNote({ weights, measurements, profile, today });
+    if (a0 != null && a7 != null && a7 - a0 >= 0.1 && !(flatNote && 'abc'.includes(flatNote.kind))) {
       out.push({ s: 6 + (a7 - a0) * 5, icon: 'scale', text: `ממוצע המשקל ירד ב-${fmt1(a7 - a0)} ק"ג השבוע` });
     }
     const ms = [...(measurements || [])].filter((m) => m.waistCm).sort((a, b) => (a.date < b.date ? -1 : 1));
@@ -266,7 +268,7 @@
   }
 
   /* When the scale says something discouraging, explain it. */
-  function scaleNote({ weights, measurements, today }) {
+  function scaleNote({ weights, measurements, today, profile }) {
     const todayW = weights.find((w) => w.date === today);
     const a0 = avgWindow(weights, today, 7);
     if (todayW && a0 != null && todayW.kg - a0 >= 0.5) {
@@ -274,6 +276,8 @@
       const trend = a7 != null && a7 - a0 >= 0.1 ? ` הממוצע השבועי ירד ב-${fmt1(a7 - a0)}.` : ' הממוצע הוא מה שקובע.';
       return `השקילה היום גבוהה מהממוצע ב-${fmt1(todayW.kg - a0)} ק"ג. זה מים, לא שומן.${trend}`;
     }
+    const p = progressNote({ weights, measurements, profile, today });
+    if (p) return p.card;
     const a14 = avgWindow(weights, addDays(today, -14), 7);
     if (a0 != null && a14 != null && Math.abs(a14 - a0) < 0.25) {
       const ms = [...(measurements || [])].filter((m) => m.waistCm).sort((a, b) => (a.date < b.date ? -1 : 1));
@@ -282,6 +286,97 @@
         + (waistDown ? ' ההיקף ממשיך לרדת, כלומר השומן יורד.' : ' ממשיכים לרשום, והכיול יתאים את היעד אם צריך.');
     }
     return null;
+  }
+
+  /* Perspective for the weeks the scale stands still (Daniel, 14.10): she lost
+     3 kg in 3 weeks — a kilo a week, the pace she wanted — and the waist is the
+     real goal anyway. The kilo-a-week comparison is shown only when she is at or
+     above it; below it she gets the total and the weeks, never "slow".
+       a  weight flat a week, pace >= 1 kg/week
+       b  weight flat a week, pace below that
+       c  weight flat, waist down (the waist is the goal: full progress)
+       d  weight and waist both down
+     Returns { kind, card, weighToast, measureToast, party } or null. */
+  function progressNote({ weights, measurements, profile, today }) {
+    const a0 = avgWindow(weights || [], today, 7), a7 = avgWindow(weights || [], addDays(today, -7), 7);
+    if (a0 == null || a7 == null) return null;
+    // "stands" = moved less than 0.3 kg either way; a real rise is never called flat
+    const down = a7 - a0 >= 0.3, up = a0 - a7 >= 0.3, stuck = !down && !up;
+    const ms = [...(measurements || [])].filter((m) => m.waistCm && m.date <= today).sort((a, b) => (a.date < b.date ? -1 : 1));
+    const last = ms[ms.length - 1], prev = ms[ms.length - 2];
+    const waistDrop = last && prev && diffDays(last.date, today) <= 7 ? r1(prev.waistCm - last.waistCm) : 0;
+    if (waistDrop >= 0.5 && stuck) {
+      const cm = fmt1(waistDrop);
+      return {
+        kind: 'c',
+        card: `המשקל עומד, והיקף המותניים ירד ב-${cm} ס"מ. ההיקף הוא המטרה האמיתית, ולכן ירידה בהיקף גם כשהמשקל לא זז היא התקדמות מלאה.`,
+        weighToast: 'נשמר. המשקל עומד, וההיקף ירד. זו התקדמות מלאה',
+        measureToast: `נשמר. ההיקף ירד ב-${cm} ס"מ. זו התקדמות מלאה, גם כשהמשקל לא זז`,
+        party: 'המשקל עומד השבוע, וההיקף ממשיך לרדת. זו המטרה האמיתית, וזו התקדמות מלאה',
+      };
+    }
+    if (waistDrop >= 0.5 && down) {
+      const line = 'ירדת גם במשקל וגם בהיקף. שבוע טוב';
+      return { kind: 'd', card: line + '.', weighToast: 'נשמר. ' + line, measureToast: 'נשמר. ' + line, party: line };
+    }
+    if (!stuck || !profile || !profile.startWeight || !profile.startDate) return null;
+    const days = diffDays(profile.startDate, today), weeks = Math.round(days / 7), lost = r1(profile.startWeight - a0);
+    if (weeks < 2 || lost < 0.5) return null;
+    const kg = fmt1(lost), inWeeks = weeks === 2 ? 'בשבועיים' : `ב-${weeks} שבועות`;
+    // the comparison must hold both for the real days and for the numbers she reads
+    const pace = Math.min(lost / (days / 7), lost / weeks);
+    if (pace >= 1) {
+      const more = pace > 1.15;
+      return {
+        kind: 'a',
+        card: `המשקל עומד השבוע, וזה לגמרי בסדר. מאז שהתחלת ירדת ${kg} ק"ג ${inWeeks}, כלומר ${more ? 'יותר מקילו בשבוע, אפילו מעל מה שרצית' : 'קילו בשבוע, כמו שרצית'}. שבוע אחד שעומד לא מוחק את זה, זה קורה לכל אחת בדרך.`,
+        weighToast: `נשמר. ${kg} ק"ג ${inWeeks}, ${more ? 'יותר מקילו בשבוע' : 'קילו בשבוע כמו שרצית'}`,
+        measureToast: null, party: null,
+      };
+    }
+    return {
+      kind: 'b',
+      card: `המשקל עומד השבוע. מאז שהתחלת ירדת ${kg} ק"ג ${inWeeks}, וזה כולו שלך. שבוע כזה הוא חלק רגיל מהדרך.`,
+      weighToast: `נשמר. ${kg} ק"ג פחות ${inWeeks}`,
+      measureToast: null, party: null,
+    };
+  }
+
+  /* One extra line on the day-close celebration about the way she has come.
+     Only facts that are true for her that evening, only what she did (never
+     "6 of 7"), and never the same kind two evenings running — except a flat
+     scale with a shrinking waist, which is said every time it is true. */
+  function journeyLine({ weights, measurements, profile, totalsMap, today, lastKind }) {
+    const p = progressNote({ weights, measurements, profile, today });
+    if (p && p.kind === 'c') return { kind: 'c', text: p.party };
+    const out = [];
+    if (p && p.kind === 'd') out.push({ kind: 'd', text: p.party });
+    const a0 = avgWindow(weights || [], today, 7);
+    const lostKg = a0 != null && profile && profile.startWeight ? r1(profile.startWeight - a0) : 0;
+    const ms = [...(measurements || [])].filter((m) => m.waistCm && m.date <= today).sort((a, b) => (a.date < b.date ? -1 : 1));
+    const lostCm = ms.length >= 2 ? r1(ms[0].waistCm - ms[ms.length - 1].waistCm) : 0;
+    if (lostKg >= 0.5 || lostCm >= 1) {
+      const parts = [lostKg >= 0.5 && `${fmt1(lostKg)} ק"ג פחות`, lostCm >= 1 && `${fmt1(lostCm)} ס"מ פחות במותניים`].filter(Boolean);
+      out.push({ kind: 'since', text: 'מאז שהתחלת: ' + parts.join(' ו-') });
+    }
+    if (lostCm >= 1) out.push({ kind: 'waist', text: `${fmt1(lostCm)} ס"מ פחות במותניים מאז ההתחלה. זו ירידה אמיתית` });
+    if (profile && profile.startDate) {
+      const n = diffDays(profile.startDate, today) + 1;
+      if (n >= 7) out.push({ kind: 'days', text: `${n} ימים עם צלחת` });
+    }
+    const logged = [0, 1, 2, 3, 4, 5, 6].filter((i) => totalsMap.has(addDays(today, -i))).length;
+    if (logged >= 3) out.push({ kind: 'week', text: `השבוע רשמת ${logged} ימים` });
+    const dn = [], dp = [];
+    for (let i = 0; i < 7; i++) {
+      const t = totalsMap.get(addDays(today, -i)), u = totalsMap.get(addDays(today, -7 - i));
+      // only evenings with a logged dinner: a day without one is not a lighter dinner
+      if (t && t.slots.dinner > 0) dn.push(t.slots.dinner);
+      if (u && u.slots.dinner > 0) dp.push(u.slots.dinner);
+    }
+    if (dn.length >= 3 && dp.length >= 3 && mean(dp) - mean(dn) >= 50) out.push({ kind: 'dinner', text: 'ארוחות הערב השבוע קלות יותר מהשבוע שעבר' });
+    const pool = out.filter((x) => x.kind !== lastKind);
+    if (!pool.length) return null;
+    return pool[hashStr(today + 'j') % pool.length];
   }
 
   function milestones({ profile, weights, measurements, totalsMap, closedSet, today }) {
@@ -330,6 +425,10 @@
   /* Mediterranean, dairy-free, and gentle when cooked soft: what the note
      falls back on when nothing she already eats fits. */
   const SAFE_PROTEIN = ['ביצה', 'דג', 'עוף', 'טונה', 'טחינה', 'טופו', 'עדשים'];
+  /* She asked to stop getting food ideas (14.10). A day-close note whose second
+     sentence uses one of these is dropped for the app's own note. Same list as
+     SUGGEST_WORDS in the Worker. */
+  const SUGGEST_WORDS = ['להוסיף', 'תוסיפי', 'תנסי', 'נסי', 'תאכלי', 'תכיני', 'לשלב', 'תשלבי', 'להחליף', 'תחליפי', 'רעיון', 'כדאי'];
 
   const PREFIX = 'בלכמשהו';
   function words(name) {
@@ -342,7 +441,7 @@
      first about today and the second the idea for tomorrow, so only the idea
      is held to the list. */
   function suggestsAvoided(text, avoid) {
-    const parts = String(text || '').split(/(?<=\.)\s+/);
+    const parts = String(text || '').split(/(?<=[.?])\s+/);
     return avoidsFood(parts.length > 1 ? parts.slice(1).join(' ') : text, avoid);
   }
 
@@ -473,7 +572,7 @@
   /* date picks among 2-3 phrasings per case, recent (earlier notes) are
      skipped, and bankLine (from the Gemini bank) closes a day that has no
      idea for tomorrow. Without date it behaves as before: first phrasing. */
-  function coachLocal({ protein, proteinGoal, streakDays, meals, yesterday, dinnerAvg14, proteinFood, newFoods, date, recent, bankLine }) {
+  function coachLocal({ streakDays, meals, yesterday, dinnerAvg14, newFoods, date, recent, bankLine }) {
     const m = meals || { breakfast: [], lunch: [], dinner: [], snack: [] };
     const total = (list) => list.reduce((s, x) => s + x.kcal, 0);
     const dinner = total(m.dinner);
@@ -487,13 +586,12 @@
     else if (fresh) firsts = [`הופיע היום משהו חדש בצלחת: ${fresh}.`, `יש היום חידוש ברשימה שלך: ${fresh}.`];
     else if (dinner > 0 && !m.snack.length) firsts = ['היום עבר בלי נשנושים בין הארוחות.', 'יום שלם בלי נשנושים בין הארוחות, יפה.'];
     else firsts = ['רשמת את כל היום, וזה מה שעושה את ההבדל.', 'עוד יום שנרשם מההתחלה ועד הסוף.', 'היום כולו רשום, וזה הבסיס של הכול.'];
+    // the second sentence never offers food: on low-protein days it used to
+    // suggest her most-eaten protein, which made it the same tuna every evening (14.10)
     let seconds;
-    if (proteinGoal && protein < proteinGoal * 0.8) {
-      const f = proteinFood || 'ביצה או דג';
-      seconds = [`מחר אפשר להוסיף ${f} לצהריים, זה מחזיק עד הערב.`, `רעיון למחר: ${f} בצהריים, כדי שהערב יהיה רגוע יותר.`];
-    } else if (streakDays >= 3) seconds = ['עוד יום ברצף של רישום, ממשיכות ככה.', 'הרצף ממשיך להתארך, וזה שלך.'];
+    if (streakDays >= 3) seconds = ['עוד יום ברצף של רישום, ממשיכות ככה.', 'הרצף ממשיך להתארך, וזה שלך.'];
     else seconds = ['מחר ממשיכים באותה דרך.', 'לילה טוב, מחר ממשיכות.'];
-    if (bankLine && !(proteinGoal && protein < proteinGoal * 0.8)) seconds = [bankLine, ...seconds];
+    if (bankLine) seconds = [bankLine, ...seconds];
     const seen = recent || [];
     const h = date ? hashStr(date) : 0;
     const combos = [];
@@ -511,9 +609,9 @@
     nutrition, sum, density, recipeNutrition,
     dayTotals, loggedSet, streak, weekAverage,
     avgWindow, kgNow, weightSeries, forecast, calibration,
-    eveningCombos, wins, scaleNote, milestones, coachFacts, coachLocal,
+    eveningCombos, wins, scaleNote, progressNote, journeyLine, milestones, coachFacts, coachLocal,
     pickAngle, toMilestone, pickFresh, STARTER_BANK, MILESTONE_TITLE, WEEKDAY_HE,
-    AVOID_SEED, SAFE_PROTEIN, avoidsFood, suggestsAvoided,
+    AVOID_SEED, SAFE_PROTEIN, SUGGEST_WORDS, avoidsFood, suggestsAvoided,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.Calc = api;

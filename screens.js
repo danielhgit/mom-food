@@ -210,6 +210,7 @@ async function viewDay(date) {
   }
   setView(html);
   growMeters(date, pct, tot.p / ctx.pGoal);
+  if (isToday && !closed && dinnerLogged) prefetchCoach(ctx, date, entries);
 
   /* --- evening suggestions --- */
   let combos = [];
@@ -245,7 +246,7 @@ async function viewDay(date) {
       if (kg != null && (kg < 30 || kg > 300)) { toast('המשקל נראה לא נכון'); return; }
       if (kg != null) await DB.put('weights', { date: ctx.t, kg: C.r1(kg) });
       if (waist != null) await DB.put('measurements', { date: ctx.t, waistCm: C.r1(waist) });
-      afterDataChange(ctx.t); vibrate(); toast('נשמר. אפשר לראות את המגמה במסך ההתקדמות');
+      afterDataChange(ctx.t); vibrate(); toast(savedToast(ctx, { kg, waist }) || 'נשמר. אפשר לראות את המגמה במסך ההתקדמות');
       rerender();
     } else if (act === 'weigh') {
       openWeighSheet(ctx);
@@ -298,10 +299,23 @@ function openWeighSheet(ctx) {
     await DB.put('weights', { date: ctx.t, kg: C.r1(kg) });
     afterDataChange(ctx.t);
     closeModal(); vibrate();
-    const note = C.scaleNote({ weights: [...ctx.weights.filter((w) => w.date !== ctx.t), { date: ctx.t, kg: C.r1(kg) }], measurements: ctx.measurements, today: ctx.t });
-    toast(note && note.startsWith('השקילה') ? 'נשמר. השקילה קצת גבוהה, זה מים. הממוצע קובע' : 'נשמר');
+    toast(savedToast(ctx, { kg }) || 'נשמר');
     rerender();
   };
+}
+
+/* What she reads right after saving a weight or a waist: a high weigh-in is
+   water, a flat week gets its perspective (Calc.progressNote), else null. */
+function savedToast(ctx, { kg, waist }) {
+  const t = ctx.t;
+  const weights = kg != null ? [...ctx.weights.filter((w) => w.date !== t), { date: t, kg: C.r1(kg) }] : ctx.weights;
+  const measurements = waist != null ? [...ctx.measurements.filter((m) => m.date !== t), { date: t, waistCm: C.r1(waist) }] : ctx.measurements;
+  const p = C.progressNote({ weights, measurements, profile: APP.profile, today: t });
+  // the waist she just typed comes first: the weight field may still hold this morning's number
+  if (p && waist != null && p.measureToast) return p.measureToast;
+  if (kg != null && (C.scaleNote({ weights, measurements, today: t }) || '').startsWith('השקילה')) return 'נשמר. השקילה קצת גבוהה, זה מים. הממוצע קובע';
+  if (p && kg != null && p.weighToast) return p.weighToast;
+  return null;
 }
 
 /* "You ate almost this same meal on another day — keep it?" Shown when today's
@@ -347,12 +361,14 @@ function openSaveMealSheet(entries, slot) {
   };
 }
 
-function openCloseDay(ctx, date, entries) {
+/* Everything the day-close note is built from, and the request Gemini gets.
+   Shared by closing the day and by the background prefetch, so both ask for
+   exactly the same note. key changes whenever anything she logged changes. */
+function coachRequest(ctx, date, entries) {
   const tot = C.sum(entries);
   const closedPlus = new Set([...ctx.closedSet, date]);
   const weekAvg = C.weekAverage(ctx.totals, closedPlus, date, ctx.t);
   const streakDays = C.streak(C.loggedSet(ctx.totals, [...closedPlus]), ctx.t);
-  const tdee = C.currentTdee(APP.profile, ctx.kg, ctx.t);
   const avg7 = C.avgWindow(ctx.weights, ctx.t, 7) ?? ctx.kg;
   const avoid = APP.profile.avoid || C.AVOID_SEED;
   const facts = C.coachFacts(entries, ctx.totals, date, ctx.recent.filter((e) => e.date >= C.addDays(date, -30)), avoid);
@@ -360,18 +376,87 @@ function openCloseDay(ctx, date, entries) {
   const recent = before.slice(0, 7).map((d) => d.coachNote);
   const recentTitles = before.slice(0, 7).map((d) => d.coachTitle).filter(Boolean);
   const angle = C.pickAngle({ date, ...facts, streakDays, weekAvg: weekAvg && weekAvg.avg, lastAngle: before[0] && before[0].coachAngle });
+  const prevAvg = C.avgWindow(ctx.weights, C.addDays(ctx.t, -7), 7);
+  const payload = { kind: 'day', kcal: tot.k, target: ctx.target, protein: tot.p, proteinGoal: ctx.pGoal,
+    weekAvg: weekAvg && weekAvg.avg, streak: streakDays, toMilestone: C.toMilestone(streakDays),
+    weightTrend: prevAvg != null && avg7 != null ? C.r1(avg7 - prevAvg) : null,
+    slots: C.dayTotals(entries).get(date)?.slots,
+    meals: facts.meals, yesterday: facts.yesterday, dinnerAvg14: facts.dinnerAvg14,
+    breakfastDays14: facts.breakfastDays14, dinnerLightestIn: facts.dinnerLightestIn, newFoods: facts.newFoods,
+    weekday: facts.weekday, angle, recent, recentTitles,
+  };
+  // what the note may say about today against other days changes too if she edits an earlier day
+  const key = date + '|' + angle + '|' + recent.length + '|'
+    + JSON.stringify([facts.yesterday, facts.dinnerAvg14, facts.dinnerLightestIn, facts.newFoods]) + '|'
+    + entries.map((e) => `${e.slot}:${e.name}:${Math.round(e.k || 0)}`).sort().join(',');
+  return { tot, weekAvg, streakDays, avg7, facts, before, recent, angle, payload, key };
+}
+
+/* Gemini can take up to 20 s, and she was leaving before the note arrived
+   (14.10). Once dinner is logged the note is asked for in the background and
+   kept, so closing the day shows it at once. It is used only for the exact
+   meals it was written for, and at most 4 asks a day come out of the 20 free. */
+let prefetchTimer = null, prefetchRun = null;
+const aiOnNow = () => !!(window.AI && AI.enabled() && APP.ui.aiEnabled !== false);
+// still looking at today, with no sheet open: she has stopped adding for now
+function restingOnToday() {
+  const h = location.hash.replace(/^#\/?/, '');
+  return (h === '' || h === 'day/' + today()) && !modalOpen();
+}
+function prefetchCoach(ctx, date, entries) {
+  clearTimeout(prefetchTimer);
+  if (!aiOnNow() || !online()) return;
+  // 8 s of quiet on the day screen first: she often logs dinner as several items,
+  // and each one goes through the add screen (where this timer must not fire)
+  prefetchTimer = setTimeout(async () => {
+    try {
+      if (!restingOnToday() || date !== today()) return;
+      const req = coachRequest(ctx, date, entries);
+      if ((APP.ui.coachPrefetch && APP.ui.coachPrefetch.key === req.key) || (prefetchRun && prefetchRun.key === req.key)) return;
+      const count = APP.ui.coachPrefetchCount && APP.ui.coachPrefetchCount.date === date ? APP.ui.coachPrefetchCount.n : 0;
+      if (count >= 4) return;
+      await saveUi({ coachPrefetchCount: { date, n: count + 1 } });
+      // a request that hangs must not hold the slot forever
+      const run = { key: req.key, promise: Promise.race([AI.coach(req.payload),
+        new Promise((_, no) => setTimeout(() => no(Object.assign(new Error('timeout'), { why: 'timeout' })), 25000))]) };
+      prefetchRun = run;
+      try {
+        const r = await run.promise;
+        await saveUi({ coachPrefetch: { date, key: req.key, text: r.text, title: r.title || '' } });
+      } catch (_) { /* closing the day asks again, or shows the app's own note */ }
+      if (prefetchRun === run) prefetchRun = null;
+      refreshBank().catch(() => {});
+    } catch (_) { /* a background nicety: never an error she sees */ }
+  }, 8000);
+}
+
+function openCloseDay(ctx, date, entries) {
+  clearTimeout(prefetchTimer);
+  const req = coachRequest(ctx, date, entries);
+  const { tot, weekAvg, streakDays, avg7, facts, before, recent, angle } = req;
+  const tdee = C.currentTdee(APP.profile, ctx.kg, ctx.t);
   // the evening's fallback words: Gemini's weekly bank when there is one, else the built-in lines
   const bankSrc = APP.ui.cheerBank && APP.ui.cheerBank.titles ? APP.ui.cheerBank : C.STARTER_BANK;
   const used = APP.ui.cheerUsed || [];
-  const bankLine = C.pickFresh(bankSrc.lines, used, date + 'l');
+  // a bank saved before 14.10 may still hold a food idea; it closes the note, so it is held to the same rule
+  const bankLine = C.pickFresh(bankSrc.lines.filter((s) => !C.avoidsFood(s, C.SUGGEST_WORDS)), used, date + 'l');
   let title = C.pickFresh(bankSrc.titles, used, date + 't');
   let note = C.coachLocal({ protein: tot.p, proteinGoal: ctx.pGoal, streakDays, ...facts, date, recent, bankLine });
+  // the celebration's extra line: the way she has come, never the same kind two evenings running
+  const journey = C.journeyLine({ weights: ctx.weights, measurements: ctx.measurements, profile: APP.profile,
+    totalsMap: ctx.totals, today: date, lastKind: before[0] && before[0].journeyKind });
   let src = 'local', why = null;
-  // Gemini writes the note when it can. Until it answers (or gives up) the card shows
-  // a quiet placeholder, so the text never changes in front of her.
+  // a note already written in the background for exactly these meals: shown at once
+  // (only while the smart help is on, and checked again against today's avoid list)
+  const pre = APP.ui.coachPrefetch;
+  const ready = aiOnNow() && pre && pre.key === req.key && !C.suggestsAvoided(pre.text, APP.profile.avoid || C.AVOID_SEED)
+    && !C.suggestsAvoided(pre.text, C.SUGGEST_WORDS) ? pre : null;
+  if (ready) { note = ready.text; if (ready.title) title = ready.title; src = 'ai'; }
+  // Otherwise Gemini writes the note when it can. Until it answers (or gives up) the card
+  // shows a quiet placeholder, so the text never changes in front of her.
   const aiOn = !!(window.AI && AI.enabled() && APP.ui.aiEnabled !== false);
-  const askAi = aiOn && online();
-  if (!askAi) why = !(window.AI && AI.configured()) ? 'none' : APP.ui.aiEnabled === false ? 'off' : !online() ? 'offline' : 'notready';
+  const askAi = !ready && aiOn && online();
+  if (!askAi && !ready) why = !(window.AI && AI.configured()) ? 'none' : APP.ui.aiEnabled === false ? 'off' : !online() ? 'offline' : 'notready';
   // only for a fully logged day: a half-logged 900 kcal day would promise a fantasy
   const forecast = entries.length >= 3 && tot.k >= ctx.target * 0.8 && tot.k < tdee ? C.forecast(avg7, tdee, tot.k) : null;
   const showForecast = forecast != null && forecast < avg7;
@@ -400,17 +485,11 @@ function openCloseDay(ctx, date, entries) {
       el.classList.remove('wait');
       el.textContent = note;
     };
-    const prevAvg = C.avgWindow(ctx.weights, C.addDays(ctx.t, -7), 7);
-    AI.coach({ kind: 'day', kcal: tot.k, target: ctx.target, protein: tot.p, proteinGoal: ctx.pGoal,
-      weekAvg: weekAvg && weekAvg.avg, streak: streakDays, toMilestone: C.toMilestone(streakDays),
-      weightTrend: prevAvg != null && avg7 != null ? C.r1(avg7 - prevAvg) : null,
-      slots: C.dayTotals(entries).get(date)?.slots,
-      meals: facts.meals, yesterday: facts.yesterday, dinnerAvg14: facts.dinnerAvg14,
-      breakfastDays14: facts.breakfastDays14, dinnerLightestIn: facts.dinnerLightestIn, newFoods: facts.newFoods,
-      weekday: facts.weekday, angle, recent, recentTitles,
-    }).then((r) => show(r), (e) => show(null, e)).then(refreshBank);
-    // Gemini may retry a busy model and fall back to a second one; 20 s covers that
-    setTimeout(() => show(null, { why: 'timeout' }), 20000);
+    // the background ask for these same meals may still be on its way: wait for it, don't ask twice
+    const pending = prefetchRun && prefetchRun.key === req.key ? prefetchRun.promise : AI.coach(req.payload);
+    pending.then((r) => show(r), (e) => show(null, e)).then(() => refreshBank()).catch(() => {});
+    // she leaves the app if it keeps her waiting (14.10): after 7 s, the app's own note
+    setTimeout(() => show(null, { why: 'timeout' }), 7000);
   } else { settle(); settle = null; }
   body.onclick = async (ev) => {
     const btn = ev.target.closest('[data-act="close"]');
@@ -419,12 +498,12 @@ function openCloseDay(ctx, date, entries) {
     btn.disabled = true;
     if (settle) { btn.innerHTML = 'רגע…'; await settled; }
     await DB.put('days', { date, closed: true, closedAt: Date.now(), coachNote: note, coachTitle: title,
-      coachSrc: src, coachWhy: why, coachAngle: angle });
+      coachSrc: src, coachWhy: why, coachAngle: angle, coachPre: !!ready, journeyKind: journey ? journey.kind : null });
     await saveUi({ cheerUsed: [...used, title, bankLine].filter(Boolean).slice(-80) });
     afterDataChange(date);
     if (window.Cloud && Cloud.enabled()) Cloud.backup(true).catch(() => {});
     closeModal(); vibrate([20, 40, 20]);
-    celebrate({ title: C.MILESTONE_TITLE[streakDays] || title, badge: C.MILESTONE_TITLE[streakDays] ? '' : (streakDays >= 3 ? `${streakDays} ימים ברצף` : ''), note });
+    celebrate({ title: C.MILESTONE_TITLE[streakDays] || title, badge: C.MILESTONE_TITLE[streakDays] ? '' : (streakDays >= 3 ? `${streakDays} ימים ברצף` : ''), note, extra: journey && journey.text });
     rerender();
   };
 }
@@ -1031,7 +1110,7 @@ async function viewProgress() {
       if (kg != null && (kg < 30 || kg > 300)) { toast('המשקל נראה לא נכון'); return; }
       if (kg != null) await DB.put('weights', { date: t, kg: C.r1(kg) });
       if (waist != null) await DB.put('measurements', { date: t, waistCm: C.r1(waist) });
-      afterDataChange(t); vibrate(); toast('נשמר'); rerender();
+      afterDataChange(t); vibrate(); toast(savedToast(ctx, { kg, waist }) || 'נשמר'); rerender();
     } else if (b.dataset.act === 'calok') {
       await saveProfile({ tdeeActual: cal.newTdee, targetOverride: null });
       await saveUi({ lastCalibrationAt: t });

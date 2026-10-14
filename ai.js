@@ -125,6 +125,7 @@
     const text = r && r.text ? String(r.text).trim() : null;
     if (!text) throw Object.assign(new Error('empty'), { why: 'empty' });
     if (root.Calc.suggestsAvoided(text, avoid)) throw Object.assign(new Error('avoid'), { why: 'rejected:avoid' });
+    if (root.Calc.suggestsAvoided(text, root.Calc.SUGGEST_WORDS)) throw Object.assign(new Error('suggest'), { why: 'rejected:suggest' });
     let title = r.title ? String(r.title).trim() : '';
     if (title && root.Calc.avoidsFood(title, avoid)) title = '';
     return { text, title };
@@ -140,7 +141,8 @@
   async function bank() {
     const avoid = (root.APP.profile && root.APP.profile.avoid) || root.Calc.AVOID_SEED;
     const r = await call('bank', { avoid });
-    const ok = (s) => typeof s === 'string' && s.trim() && !/[A-Za-z0-9!]/.test(s) && !root.Calc.avoidsFood(s, avoid);
+    const ok = (s) => typeof s === 'string' && s.trim() && !/[A-Za-z0-9!]/.test(s) && !root.Calc.avoidsFood(s, avoid)
+      && !root.Calc.avoidsFood(s, root.Calc.SUGGEST_WORDS);   // a bank line becomes sentence 2: no food ideas there either
     const titles = (r.titles || []).filter(ok), lines = (r.lines || []).filter(ok);
     if (titles.length < 6 || lines.length < 6) throw new Error('thin bank');
     return { titles, lines };

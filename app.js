@@ -113,7 +113,8 @@ function toast(msg, action) {
   } else { b.hidden = true; b.onclick = null; }
   $('#toast').classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(hideToast, action ? 5000 : 2600);
+  // the progress lines after a weigh-in are a full sentence: give her time to read them
+  toastTimer = setTimeout(hideToast, action ? 5000 : msg.length > 40 ? 4500 : 2600);
 }
 function hideToast() { if (window.Tour && Tour.holdsToast()) return; $('#toast').classList.remove('show'); }
 
@@ -126,7 +127,7 @@ const HORN = `<svg viewBox="0 0 64 64" aria-hidden="true"><g class="blow">
   <ellipse cx="35" cy="31" rx="3.2" ry="7.4" transform="rotate(45 35 31)" fill="#c9941a"/></g>
   <g class="blast" stroke="#2f8068" stroke-width="3" stroke-linecap="round">
   <path d="M43 23 L51 15"/><path d="M47 31 L57 29"/><path d="M36 19 L37 9"/></g></svg>`;
-function celebrate({ title, note, badge }) {
+function celebrate({ title, note, badge, extra }) {
   closeCelebrate(true);
   const colors = ['#1f5a48', '#2f8068', '#e9b949', '#b98a14', '#8cc9a8', '#e08a4a'];
   let bits = '';
@@ -146,6 +147,7 @@ function celebrate({ title, note, badge }) {
       ${badge ? `<div class="pill gold pbadge">${icon('trophy', 'sm')}${esc(badge)}</div>` : ''}
       <h2>${esc(title || 'עוד יום יפה מאחורייך')}</h2>
       <p>${esc(note || '')}</p>
+      ${extra ? `<p class="pextra">${esc(extra)}</p>` : ''}
       <button class="btn block goodbtn" data-act="night">${icon('moon')}לילה טוב</button>
     </div>`;
   el.onclick = (ev) => { if (ev.target.closest('[data-act="night"]') || ev.target === el) closeCelebrate(); };

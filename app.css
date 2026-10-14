@@ -431,6 +431,7 @@ input::placeholder,textarea::placeholder{color:#b9aea3; font-weight:400}
 #party .pbadge{display:inline-flex; align-items:center; gap:6px; margin-bottom:6px}
 #party h2{margin:4px 0 10px; font-size:1.6rem; line-height:1.25; font-weight:900; color:var(--accent)}
 #party p{margin:0 0 18px; font-size:1.05rem; color:var(--text)}
+#party p.pextra{margin:-6px 0 18px; font-size:.98rem; font-weight:700; color:var(--accent)}
 @media (prefers-reduced-motion: reduce){
   #party .confetti{display:none} #party .pcard,#party .horn .blow{animation:none}
   #party .horn .blast{animation:none; opacity:1}
